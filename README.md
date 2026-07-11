@@ -91,4 +91,3 @@ route streams for up to 5 minutes (`maxDuration = 300`).
 
 ---
 
-Solo build by [@mightbeanshuu](https://github.com/mightbeanshuu).
