@@ -1,6 +1,7 @@
 import { generateObject, streamObject, streamText } from "ai";
 import type { z } from "zod";
 import { chainFor, model, type Role } from "./models";
+import { enforceRateLimit, MODEL_RATE_LIMIT, rateLimitKey } from "./rateLimit";
 
 // Per-attempt wall-clock budget. A model that accepts the request but never returns
 // (common on congested free tiers) is aborted so the executor falls through.
@@ -31,6 +32,10 @@ export async function runText(
   let last: unknown;
   for (const id of chain) {
     try {
+      await enforceRateLimit({
+        key: rateLimitKey("model", `${role}:${id}`),
+        ...MODEL_RATE_LIMIT,
+      });
       const res = streamText({
         model: model(id),
         system: opts.system,
@@ -62,6 +67,10 @@ export async function runObject<T>(
   let last: unknown;
   for (const id of chain) {
     try {
+      await enforceRateLimit({
+        key: rateLimitKey("model", `${role}:${id}`),
+        ...MODEL_RATE_LIMIT,
+      });
       const res = streamObject({
         model: model(id),
         schema: opts.schema,
@@ -90,6 +99,10 @@ export async function genObject<T>(
   let last: unknown;
   for (const id of chain) {
     try {
+      await enforceRateLimit({
+        key: rateLimitKey("model", `${role}:${id}`),
+        ...MODEL_RATE_LIMIT,
+      });
       const { object } = await generateObject({
         model: model(id),
         schema: opts.schema,

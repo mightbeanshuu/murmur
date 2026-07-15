@@ -1,4 +1,5 @@
 import type { SwarmEvent } from "./types";
+import { publishSwarmEvent } from "./kafka";
 
 /**
  * Async event queue that lets many parallel agents push events while a single
@@ -10,8 +11,13 @@ export class EventBus implements AsyncIterable<SwarmEvent> {
   private waiters: ((r: IteratorResult<SwarmEvent>) => void)[] = [];
   private closed = false;
 
+  constructor(private readonly runId: string) {}
+
   emit(event: SwarmEvent) {
     if (this.closed) return;
+    void publishSwarmEvent(this.runId, event).catch((e) => {
+      console.error("Failed to publish swarm event to Kafka", e);
+    });
     // If the HTTP stream is already waiting for the next event, resolve it
     // immediately. Otherwise, buffer the event until a reader asks for it.
     const w = this.waiters.shift();
