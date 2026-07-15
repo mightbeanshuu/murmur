@@ -52,6 +52,7 @@ that:
 - **Self-correction** — the validator gate is also the reliability mechanism: weak outputs get one feedback-driven revision before they're accepted.
 - **Shared blackboard** — downstream agents receive upstream outputs as context.
 - **Live observability** — a streaming SSE event bus drives a React Flow graph; click any node to read its output as it's written.
+- **Production controls** — optional Kafka publishing mirrors every swarm event for distributed consumers, and optional Redis limits runs/model calls across app instances.
 
 ## Architecture
 
@@ -59,6 +60,8 @@ that:
 src/lib/swarm/
   types.ts         shared domain + streaming event types
   bus.ts           async event queue → interleaves parallel agent streams into one HTTP stream
+  kafka.ts         optional Kafka publisher for distributed event streaming / audit trails
+  rateLimit.ts     optional Redis-backed shared rate limiter
   models.ts        env-configurable Claude model roles
   planner.ts       streamObject → validated task DAG
   worker.ts        per-specialist system prompts; streams tokens
@@ -69,7 +72,7 @@ src/lib/store.ts             Zustand store; reduces events → graph state
 src/components/               React Flow graph, animated nodes, live side panel
 ```
 
-**Stack:** Next.js 16 (App Router) · TypeScript · Vercel AI SDK · OpenRouter (Claude + open models) · React Flow · Zustand.
+**Stack:** Next.js 16 (App Router) · TypeScript · Vercel AI SDK · OpenRouter (Claude + open models) · KafkaJS · ioredis · React Flow · Zustand.
 
 **Models (mixed by role):** structured-output roles (planner, validator) run on a capable paid Claude model; plain-text roles (worker, synthesizer) run on free models. All slugs are env-overridable.
 
@@ -84,10 +87,23 @@ pnpm dev                     # http://localhost:3000
 Then give the swarm a goal, e.g. _"Create a go-to-market strategy for an AI code-review startup"_,
 and watch it work.
 
+### Optional production infrastructure
+
+Murmur runs locally without Kafka or Redis. In production, set these env vars to enable shared infrastructure:
+
+```bash
+KAFKA_BROKERS=broker-1:9092,broker-2:9092
+KAFKA_SWARM_EVENTS_TOPIC=murmur.swarm.events
+REDIS_URL=redis://default:password@host:6379
+```
+
+- Kafka receives every `SwarmEvent` with the run id as the message key, so observability, replay, audit, and downstream analytics can consume the same event stream as the UI.
+- Redis enforces distributed limits for new swarm runs and model attempts, preventing a multi-instance deployment from overrunning provider quotas.
+
 ## Deploy
 
-One-click on Vercel — set `OPENROUTER_API_KEY` in project env vars. The `/api/swarm`
-route streams for up to 5 minutes (`maxDuration = 300`).
+One-click on Vercel — set `OPENROUTER_API_KEY` in project env vars. Add `REDIS_URL` and
+Kafka settings for production shared state. The `/api/swarm` route streams for up to
+5 minutes (`maxDuration = 300`).
 
 ---
-

@@ -1,5 +1,6 @@
 import { EventBus } from "@/lib/swarm/bus";
 import { runSwarm } from "@/lib/swarm/orchestrator";
+import { enforceRateLimit, rateLimitKey, RateLimitError, RUN_RATE_LIMIT } from "@/lib/swarm/rateLimit";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -23,7 +24,33 @@ export async function POST(req: Request) {
     });
   }
 
-  const bus = new EventBus();
+  const clientId =
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    req.headers.get("x-real-ip") ??
+    "local";
+
+  try {
+    await enforceRateLimit({
+      key: rateLimitKey("runs", clientId),
+      ...RUN_RATE_LIMIT,
+    });
+  } catch (e) {
+    if (e instanceof RateLimitError) {
+      return new Response(JSON.stringify({ error: e.message, retryAfterSeconds: e.retryAfterSeconds }), {
+        status: 429,
+        headers: {
+          "content-type": "application/json",
+          "retry-after": String(e.retryAfterSeconds),
+        },
+      });
+    }
+    return new Response(JSON.stringify({ error: "Rate limiter unavailable." }), {
+      status: 503,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  const bus = new EventBus(crypto.randomUUID());
   const encoder = new TextEncoder();
 
   // Kick off the run; failures are surfaced as an error event then close.
