@@ -26,6 +26,9 @@ const planSchema = z.object({
     .describe("How to fuse all worker outputs into one polished final deliverable."),
 });
 
+// Interview note: this system prompt is the planner's control policy. It asks the
+// model for a small DAG, pushes it toward parallel execution, and limits agent
+// types so the orchestrator receives a compact, machine-runnable plan.
 const SYSTEM = `You are the Planner of an autonomous agent swarm.
 Decompose the user's goal into a small DAG (2-4 tasks) of specialist subtasks that
 together fully solve it. STRONGLY maximize PARALLELISM: prefer independent tasks with
@@ -49,10 +52,14 @@ function fallbackPlan(goal: string): SwarmPlan {
 }
 
 export async function plan(goal: string, bus: EventBus): Promise<SwarmPlan> {
+  // First UI-visible event for the planning phase.
   bus.emit({ kind: "plan.start" });
 
   let plan: SwarmPlan;
   try {
+    // Schema-constrained generation: the model must return an object matching
+    // planSchema, not arbitrary prose. This is critical because the orchestrator
+    // will execute these tasks programmatically.
     const { object } = await genObject("planner", {
       schema: planSchema,
       system: SYSTEM,
@@ -61,10 +68,13 @@ export async function plan(goal: string, bus: EventBus): Promise<SwarmPlan> {
     plan = { goal, ...object };
     bus.emit({ kind: "plan.token", delta: plan.summary });
   } catch {
+    // Product tradeoff: fallback keeps the app usable during model/rate-limit
+    // failures, but the default plan is less tailored than a real planner output.
     plan = fallbackPlan(goal);
     bus.emit({ kind: "plan.token", delta: plan.summary });
   }
 
+  // Emits the complete DAG so the frontend can create graph nodes and edges.
   bus.emit({ kind: "plan.done", plan });
   return plan;
 }

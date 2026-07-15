@@ -16,21 +16,21 @@ function ago(ts: number): string {
 }
 
 export function RecentRuns() {
-  const [runs, setRuns] = useState<SavedRun[]>([]);
+  const [runs, setRuns] = useState<SavedRun[]>(() => {
+    seedOnce(SAMPLE_RUN);
+    return listRuns();
+  });
   const loadRun = useSwarm((s) => s.loadRun);
   const runStatus = useSwarm((s) => s.runStatus);
   const goal = useSwarm((s) => s.goal);
 
   const refresh = useCallback(() => setRuns(listRuns()), []);
 
-  useEffect(() => {
-    seedOnce(SAMPLE_RUN);
-    refresh();
-  }, [refresh]);
-
   // Refresh the list whenever a run finishes (it just got persisted).
   useEffect(() => {
-    if (runStatus === "done") refresh();
+    if (runStatus !== "done") return;
+    const id = window.setTimeout(refresh, 0);
+    return () => window.clearTimeout(id);
   }, [runStatus, refresh]);
 
   return (

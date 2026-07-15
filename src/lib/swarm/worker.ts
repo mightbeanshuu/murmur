@@ -4,6 +4,8 @@ import type { SwarmTask } from "./types";
 
 const BREVITY = " Be concise and high-signal: ~250-350 words. No preamble or filler.";
 
+// Record<SwarmTask["type"], string> forces every worker type to have a prompt.
+// If a new worker type is added later, TypeScript will catch a missing prompt.
 const SYSTEM: Record<SwarmTask["type"], string> = {
   researcher:
     "You are a Researcher agent. Produce a dense, well-structured briefing: key facts, " +
@@ -36,6 +38,8 @@ export async function runWorker(
 ): Promise<string> {
   bus.emit({ kind: "agent.status", id: agentId, status: feedback ? "retrying" : "thinking" });
 
+  // Shared-blackboard prompt injection: downstream workers receive dependency
+  // outputs so they can build on prior work instead of starting cold.
   const blackboard = deps.length
     ? "\n\n## Upstream results you must build on:\n" +
       deps.map((d) => `### ${d.title}\n${d.output}`).join("\n\n")
@@ -49,8 +53,10 @@ export async function runWorker(
     onDelta: (delta) => {
       if (!started) {
         started = true;
+        // The first streamed token marks the agent as visibly active in the UI.
         bus.emit({ kind: "agent.status", id: agentId, status: "streaming" });
       }
+      // Each token delta is streamed to the frontend through SSE.
       bus.emit({ kind: "agent.token", id: agentId, delta });
     },
   });

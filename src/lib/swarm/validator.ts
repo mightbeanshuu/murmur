@@ -2,6 +2,8 @@ import { z } from "zod";
 import { genObject } from "./run";
 import type { SwarmTask } from "./types";
 
+// Structured verdict schema: the validator must return a score, boolean
+// approval, and actionable feedback instead of free-form text.
 const schema = z.object({
   score: z.number().min(0).max(10).describe("Quality of the output against the brief, 0-10."),
   approved: z.boolean().describe("True if the output fully satisfies the brief."),
@@ -23,18 +25,24 @@ export interface Verdict {
 
 export async function validate(task: SwarmTask, output: string): Promise<Verdict> {
   try {
+    // The validator judges the worker output against the original task brief,
+    // not against the final user goal. This keeps validation scoped and concrete.
     const { object } = await genObject("validator", {
       schema,
       system: SYSTEM,
       prompt: `Brief:\nTask "${task.title}": ${task.brief}\n\nWorker output:\n${output}`,
     });
     return {
+      // Code-level guardrail: approval requires both the model's boolean and
+      // a minimum score. This prevents "approved: true, score: 4" from passing.
       approved: object.approved && object.score >= 7,
       score: object.score,
       feedback: object.feedback,
     };
   } catch {
     // If every validator model is rate-limited, don't block the run — pass the work through.
+    // Production improvement: mark this as "unvalidated" instead of silently
+    // treating it as a normal approved result.
     return { approved: true, score: 7, feedback: "Validator unavailable; auto-approved." };
   }
 }
