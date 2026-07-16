@@ -130,3 +130,76 @@
 ### Revisit items
 - Local Compose is intentionally single-node and not high availability. Production needs replicated managed Kafka/Redis, TLS/SASL, backups, alerts, and topic replication factor 3.
 - Redis and Kafka cannot share a transaction. Current ordering preserves Redis as the recoverable source and fails visibly on Kafka error; strict no-gap asynchronous publication needs an outbox worker.
+
+## Fresh learning roadmap and deployed-provider correction
+- User supplied a screenshot of the deployed Vercel UI and clarified that they believe a Grok key is configured there.
+- Verified source configuration in:
+  - `src/lib/swarm/models.ts`
+  - `src/lib/swarm/run.ts`
+  - `src/app/api/swarm/route.ts`
+  - `.env.example`
+- Finding: current source reads `OPENROUTER_API_KEY` only. No `GROK_API_KEY`, `XAI_API_KEY`, `GROQ_API_KEY`, xAI provider, or Grok default model is present.
+- Screenshot inference: an AI provider key exists in the deployed environment because planner/worker execution started. The screenshot alone does not identify which model generated each output.
+- Screenshot failure pattern recorded: analyst completed; three workers failed; synthesizer continued with fallback subtask text. This maps to the worker catch path in `orchestrator.ts` and all-model fallback behavior in `run.ts`.
+- Added a fresh Sessions 9–18 roadmap to `sessions.md` covering provider failures, TypeScript, Next.js, Kafka, Redis, testing, durable orchestration, observability/security/cost, DevOps/deployment, and senior interview preparation.
+- Started Session 9 with provider-vs-model distinction and screenshot-led failure diagnosis.
+- No key values or secrets were read or stored.
+
+## Vercel production readiness incident
+- Reproduced the deployed failure at `GET /api/health`: HTTP 503, with Kafka and Redis both down at zero-millisecond probe latency.
+- Linked the local checkout to the existing Vercel `murmur` project and inspected environment-variable names only; no secret values were read.
+- Confirmed production currently contains `OPENROUTER_API_KEY` but no required Kafka or Redis configuration.
+- Confirmed the latest GitHub commit built and deployed successfully. The failure is runtime dependency configuration, not compilation or deployment.
+- Vercel Marketplace currently exposes Redis products but no Kafka product. Finishing the live fix requires a managed Kafka provider plus a managed Redis resource and their production connection settings.
+- Preserved the fail-closed production design: no optional or in-memory Kafka/Redis fallback was introduced.
+- Learning captured: build success vs runtime readiness, local Compose DNS vs public production endpoints, managed services, and why infrastructure credentials belong in the deployment environment rather than Git.
+
+## Session 9 close / Session 10 start
+- Searched current web status: Upstash Kafka discontinued March 11, 2025 (corrected prior assumption it was still viable). Redis Cloud confirmed live on Vercel Marketplace.
+- User chose Redpanda Cloud (Kafka) + Redis Cloud via Vercel Marketplace (Redis) for the production fix; signups not yet completed by user.
+- Re-read `src/lib/swarm/run.ts` and `src/lib/swarm/models.ts`; identified that `shouldFallback(e)` in `runText()` does not actually gate the retry loop (no `else { throw }`), so non-retryable errors still walk the full model chain before `AllModelsFailed`. `runObject`/`genObject` don't call `shouldFallback` at all.
+- Started Session 10 (TypeScript through Murmur): read `src/lib/swarm/types.ts` and `src/lib/swarm/orchestrator.ts` line by line.
+
+## Session 11 — SSE review + Redis + Docker deep dives
+- Learner requested out-of-roadmap-order teaching: SSE/EventBus review, then Redis, then Docker/Compose; Next.js session explicitly pushed to the very end.
+- Re-read `src/lib/swarm/bus.ts` and `src/app/api/swarm/route.ts` for the SSE deep dive.
+- Read `src/lib/swarm/redis.ts`, `src/lib/swarm/session.ts`, `src/lib/swarm/rateLimit.ts` for the Redis deep dive (both Lua scripts explained line by line).
+- Read `docker-compose.yml` and `Dockerfile` for the Docker deep dive.
+- No code changes made this session — teaching only.
+
+## Session 12 — Full backend scan + master deep dive
+- Scanned every remaining backend file: `src/lib/swarm/config.ts`, `src/lib/swarm/infrastructure.ts`, `src/app/api/health/route.ts`, `src/app/api/swarm/[runId]/route.ts`, `src/lib/store.ts` (plus re-verified all previously read swarm files and `useRunSwarm.ts`).
+- Wrote the "MASTER DEEP DIVE — Full Backend Scan" section into `imp notes.md`: 10-layer walkthrough (config → readiness → connections → Lua scripts → AI executors → agents → EventBus → API gates/stream → replay → browser reducer), master flowchart, failure-mode table, and master interview answers.
+- Wrote "THE CANDIDATE HANDBOOK" section into `imp notes.md`: stack-at-a-glance table, full annotated end-to-end flowchart + 12-step narrative, routes reference, Redis data structures + all five rate-limiting algorithms compared, Kafka vocabulary + Murmur's exact producer/topic choices, per-tech senior interview Q&A (Next.js, TypeScript, AI SDK/Zod, SSE, EventBus, Redis, Kafka, system design), and a rapid-fire glossary.
+- No code changes — documentation and teaching only.
+
+## Session 14 — Testing: DAG wave scheduling + Redis integration tests
+- User requested: skip Kafka for now, focus rate-limiter question follow-up (what is Lua), then testing — specifically Redis integration tests, plus whatever else is left in the project (DAG waves, etc).
+- Checked local infra: `murmur-redis-1` container already running/healthy.
+- Installed `vitest` as a dev dependency (`pnpm add -D vitest`), added `"test": "vitest run"` to `package.json` scripts.
+- Extracted the orchestrator's inline `ready()` closure into `src/lib/swarm/dagSchedule.ts` (`nextWave`, `planWaves`) — pure, dependency-free functions — and updated `src/lib/swarm/orchestrator.ts` to import `nextWave` instead of the local closure. Behavior unchanged; confirmed via `pnpm exec tsc --noEmit` (clean).
+- Added `src/lib/swarm/dagSchedule.test.ts`: 7 unit tests covering parallel waves, sequential chains, fan-in, direct cycle detection, and missing-dependency detection.
+- Added `src/lib/swarm/redis.integration.test.ts`: 8 integration tests against the REAL local Redis container — rate limiter boundary/TTL-guard behavior (directly verifying the count===1 checkpoint answered earlier), and `persistRunEvent` idempotency/ordering (replay no-op, stale-sequence rejection).
+- `pnpm test`: 2 files, 15/15 passed. `pnpm lint`: clean.
+- No Kafka work this session per explicit user request.
+
+## Placement handbook and professional PDF
+- Loaded the technical tutoring instructions and adapted the artifact to the learner's fast, architecture-first Basic-to-Interview route.
+- Audited source behavior across the frontend, all API routes, EventBus, orchestration, AI/Zod, Redis Lua/session store, Kafka producer/readiness, Dockerfile, Compose, and package versions.
+- Researched current primary documentation for every technology and recurring interview themes from LeetCode Discuss, Naukri Code360, and GeeksforGeeks. Firecrawl authentication existed but its credit balance was zero; direct web research was used instead.
+- Created `Murmur_Placement_Handbook.md` with 18 modules and 16,500+ words:
+  - four frontend modules;
+  - six backend modules;
+  - three infrastructure/production modules;
+  - three interview/revision modules plus opening/system-map modules.
+- Added six custom SVG flowcharts:
+  - end-to-end browser/API/orchestrator/durability flow;
+  - EventBus live versus durable branches;
+  - DAG waves and validation;
+  - Redis rate limiter and atomic session persistence;
+  - Kafka producer/partitions/future consumer groups;
+  - local Compose versus production deployment.
+- Added a canonical correction ledger to `imp notes.md` to supersede earlier overstatements about durable-before-visible delivery, automatic replay, cancellation, Kafka consumers, exactly-once semantics, and local HA.
+- Created dense black-and-white print CSS with color reserved for diagrams.
+- Rendered `Murmur_Placement_Handbook.html` with Pandoc and `Murmur_Placement_Handbook.pdf` with headless Chrome.
+- Final PDF verification: A4, 35 pages, 1.8 MB, tagged, unencrypted; TOC fits one page; sampled diagrams/tables/code/glossary/source pages render without clipping.

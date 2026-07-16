@@ -1310,3 +1310,787 @@ Interview answer:
 4. Reconnect/replay design with runId and sequence
 5. Strict delivery tradeoffs and failure handling
 ```
+
+---
+
+# MASTER DEEP DIVE — Full Backend Scan (Session 12, 2026-07-16)
+
+Every backend file scanned and explained, layer by layer, bottom-up. This is the
+single reference document for the whole Murmur backend.
+
+## Layer 0 — File map: what each file owns
+
+```text
+src/lib/swarm/
+  config.ts          reads + validates every env var (fail-fast)
+  infrastructure.ts  cached Kafka+Redis health probes (5s cache + in-flight dedup)
+  redis.ts           the ONE shared Redis connection (singleton)
+  kafka.ts           the ONE shared Kafka producer + admin topic check (singleton)
+  rateLimit.ts       Redis Lua fixed-window rate limiter
+  session.ts         Redis run projection (hash) + append-only event stream
+  bus.ts             EventBus: live handoff to SSE + ordered durable delivery
+  types.ts           domain + event types (discriminated union SwarmEvent)
+  models.ts          OpenRouter client + per-role model fallback chains
+  run.ts             runText/runObject/genObject executors with chain fallback
+  planner.ts         goal -> Zod-validated DAG plan (with fallback plan)
+  worker.ts          one task execution, blackboard context, revision retry
+  validator.ts       quality gate with code-level score guardrail
+  orchestrator.ts    wave scheduler, validator retry loop, synthesis
+src/app/api/
+  health/route.ts        GET readiness probe (200/503)
+  swarm/route.ts         POST start run + SSE stream out
+  swarm/[runId]/route.ts GET replay a finished/ongoing run from Redis
+src/lib/
+  useRunSwarm.ts     browser: fetch POST, parse SSE frames, apply() each event
+  store.ts           Zustand reducer: SwarmEvent -> graph/UI state
+```
+
+## Layer 1 — config.ts: validated configuration (fail-fast)
+
+- `required(name)` — throws `InfrastructureConfigError` if an env var is missing/blank.
+  Fail-fast: a missing `KAFKA_BROKERS` fails at first use with a NAMED error instead
+  of a confusing network timeout later.
+- `positiveInt(name, fallback)` — optional numeric envs; garbage like `"abc"` or `-5`
+  throws instead of silently becoming `NaN`.
+- `bool(name)` — accepts 1/0, true/false, yes/no; anything else throws.
+- `kafkaSasl()` — username+password must be configured TOGETHER (half a credential is
+  a config bug); mechanism must be plain / scram-sha-256 / scram-sha-512. Managed
+  Kafka (Redpanda/Confluent) requires SASL; local Compose runs PLAINTEXT with no SASL.
+- `getKafkaConfig()` — splits `KAFKA_BROKERS` on commas (multi-broker support),
+  regex-validates the topic name (`^[a-zA-Z0-9._-]+$`).
+- `getRedisConfig()` — parses `REDIS_URL` with `new URL()` and requires the protocol
+  to be `redis:` or `rediss:` (the extra `s` = TLS, needed for managed Redis).
+- Key idea: config errors are a DIFFERENT CLASS from network errors. A config error
+  means "the operator misconfigured the deployment"; a network error means "the
+  dependency is down." infrastructure.ts preserves that distinction in health output.
+
+## Layer 2 — infrastructure.ts + /api/health: readiness
+
+- `checkDependency(fn)` wraps a probe, returning `{ ok, latencyMs, error? }` —
+  latency is measured even on failure (a 5000ms failure means timeout;
+  0ms failure means instant refusal e.g. DNS/config — that's how we diagnosed the
+  Vercel incident: latencyMs 0 = nothing reachable at all).
+- `getInfrastructureHealth()`:
+  - Result cached for `MURMUR_INFRA_HEALTH_CACHE_MS` (default 5s) so a burst of
+    requests doesn't hammer Kafka admin + Redis PING every time.
+  - `inFlight` dedup: if a probe is ALREADY running, new callers await THAT promise
+    instead of launching parallel probes (thundering-herd protection).
+  - `force: true` (used by /api/health) bypasses the cached RESULT but still shares
+    an in-flight probe.
+  - Kafka + Redis probed CONCURRENTLY via `Promise.all` — total wait is max(kafka,
+    redis), not sum.
+- `assertInfrastructureReady()` throws `InfrastructureUnavailableError` carrying the
+  full health object, so the API route can tell the client WHICH dependency is down.
+- `/api/health/route.ts`:
+  - `export const dynamic = "force-dynamic"` — Next.js must never cache/pre-render
+    this; a cached "ready" would defeat the whole point.
+  - `cache-control: no-store` — tells CDNs/browsers the same thing.
+  - Returns HTTP 200 with `status: "ready"` or HTTP 503 with per-dependency detail.
+    Both Docker's HEALTHCHECK and load balancers key off the status code alone.
+
+## Layer 3 — redis.ts / kafka.ts: singleton connections
+
+redis.ts:
+- Module-level `redisClient` / `redisPromise` = one connection per server process,
+  shared by rate limiting AND session persistence.
+- `lazyConnect: true` — constructing does not connect; `.connect()` does. Failure is
+  surfaced where you can handle it, not in a constructor.
+- `maxRetriesPerRequest: 1`, `enableOfflineQueue: false` — FAIL FAST + VISIBLY. If
+  Redis is down, commands throw instead of silently queueing in memory.
+- `client.on("end", ...)` resets the singletons to null so the NEXT `getRedis()`
+  builds a fresh connection instead of returning a dead one forever.
+- `retryStrategy: attempt * 100 capped at 2000ms` — linear backoff for reconnects.
+
+kafka.ts:
+- Producer config: `idempotent: true` (broker de-duplicates producer retries — same
+  spirit as the Redis sequence guard), `maxInFlightRequests: 5` (safe upper bound for
+  idempotent ordering), `allowAutoTopicCreation: false` (topics are provisioned by
+  infrastructure — compose's kafka-init — never implicitly by app traffic; an
+  auto-created topic would get default partitions/retention, wrong for production).
+- `publishSwarmEvent(envelope)`:
+  - `key: envelope.runId` — Kafka hashes the key to pick a partition; SAME key =
+    SAME partition = strict ordering guarantee PER RUN (not across runs).
+  - `acks: -1` — wait for ALL in-sync replicas before confirming. Slowest, safest.
+  - `headers: { eventKind, eventVersion, eventId }` — consumers can filter/route
+    without parsing the JSON value; version supports future schema evolution.
+  - `timestamp: envelope.occurredAt` — event time, not broker-arrival time.
+- `pingKafka()` — connects an ADMIN client and verifies the topic actually EXISTS
+  (`fetchTopicMetadata`), not just that the broker answers TCP. "Broker up but topic
+  missing" is a real failure mode this catches.
+
+## Layer 4 — rateLimit.ts + session.ts: the two Lua scripts
+
+Rate limiter (fixed window):
+```lua
+local count = redis.call("INCR", KEYS[1])
+if count == 1 then redis.call("EXPIRE", KEYS[1], ARGV[1]) end
+return { count, redis.call("TTL", KEYS[1]) }
+```
+- INCR+EXPIRE must be atomic: two separate round-trips would race (both requests see
+  count==1) or crash between calls leaving a counter with NO expiry (stuck limited
+  forever). Lua = one atomic server-side unit.
+- JS side throws `RateLimitError` with `retryAfterSeconds = max(TTL, 1)`; API maps it
+  to HTTP 429 + `retry-after` header.
+- Keys: `murmur:rate:runs:<clientIP>` and `murmur:rate:model:<role>:<modelId>`.
+- Tradeoff: fixed window allows a 2x burst across a window boundary; sliding
+  window/token bucket fix that at higher cost.
+
+Event persistence (session.ts PERSIST_EVENT):
+```lua
+local current = tonumber(redis.call("HGET", KEYS[1], "eventCount") or "0")
+if current >= sequence then return 0 end          -- idempotency guard
+for i = 6, #ARGV, 2 do redis.call("HSET", KEYS[1], ARGV[i], ARGV[i+1]) end
+redis.call("EXPIRE", KEYS[1], ARGV[2])
+redis.call("XADD", KEYS[2], "MAXLEN", "~", ARGV[3], ARGV[4], "envelope", ARGV[5])
+redis.call("EXPIRE", KEYS[2], ARGV[2])
+return 1
+```
+- Two keys, one atomic script: hash `murmur:run:<runId>` (current-state projection)
+  and stream `murmur:run:<runId>:events` (append-only history). Lightweight CQRS:
+  one write path, two read shapes.
+- Idempotency twice over: the sequence guard (replayed event = no-op) AND the
+  deterministic stream ID `<sequence>-0` (XADD rejects duplicate/lower IDs at the
+  data-structure level).
+- `MAXLEN ~ 10000` — stream trimmed approximately (~ is cheaper than exact).
+- JS side promotes event fields into hash fields: run.start -> goal/startedAt;
+  run.done -> status=completed/final; top-level error -> lastError.
+- `finishRunSession` uses MULTI/EXEC (transaction) — lighter than Lua when you just
+  need commands batched without conditional logic.
+- TTL 86400s (1 day) on both keys — runs auto-expire; Redis is not unbounded storage.
+
+## Layer 5 — models.ts + run.ts: the AI execution layer
+
+- ONE provider key (`OPENROUTER_API_KEY`) unlocks MANY models. Key = authentication;
+  `chainFor(role)` = model selection. A working key never guarantees a specific model
+  succeeds.
+- `hasPaidAccess()` — one probe of openrouter.ai/api/v1/key per process, cached in a
+  module promise. Paid key => Claude heads the chain for planner/validator/
+  synthesizer. WORKERS ALWAYS STAY FREE (cost control: workers are many + parallel).
+- run.ts executors (`runText` streaming text, `runObject` streaming structured,
+  `genObject` non-streaming structured) all share the same skeleton:
+  chain -> for each model: rate-limit gate -> attempt with
+  `AbortSignal.timeout(40s)` + `maxRetries: 0` -> success returns, failure falls
+  through to next model -> chain exhausted throws `AllModelsFailed`.
+- `maxRetries: 0` because retry policy lives in the CHAIN (try a different model),
+  not in the SDK (retry the same model).
+- KNOWN ISSUE (found Session 9): `shouldFallback(e)` in runText does not actually
+  gate anything — `if (!shouldFallback(e)) continue;` has no else-throw, so EVERY
+  error walks the whole chain; runObject/genObject never call it at all. A
+  non-retryable bug (e.g. bad schema) wastes attempts on 4 models before failing.
+
+## Layer 6 — the agents
+
+planner.ts:
+- `planSchema` (Zod): 2-4 tasks, each `{id, type: researcher|analyst|writer|coder,
+  title, brief, dependsOn}` + synthesisBrief. `.describe()` strings are sent to the
+  model as field-level instructions.
+- System prompt is the CONTROL POLICY: small DAG, STRONGLY maximize parallelism,
+  dependencies only when genuinely needed.
+- On total planner failure: `fallbackPlan(goal)` — generic 2-task parallel
+  research+analysis plan. Run degrades, never dies at planning.
+
+worker.ts:
+- `SYSTEM: Record<SwarmTask["type"], string>` — Record forces a prompt for EVERY
+  worker type; add a new type and TS errors until you write its prompt.
+- Blackboard injection: upstream outputs are pasted into the prompt under
+  "## Upstream results you must build on".
+- `feedback` param non-empty = validator-rejected revision; feedback appended under
+  "## Validator feedback to fix on this revision".
+- First streamed delta flips status thinking->streaming (exact moment UI shows the
+  agent "typing"); every delta becomes an `agent.token` event.
+
+validator.ts:
+- Zod verdict `{score 0-10, approved boolean, feedback}`.
+- CODE-LEVEL GUARDRAIL: `approved: object.approved && object.score >= 7` — the model
+  cannot pass work with an inconsistent "approved but score 4" verdict.
+- If ALL validator models fail: auto-approve with score 7 + note. Tradeoff: prefer
+  completing the run over blocking on an unavailable judge. Production improvement:
+  mark output "unvalidated" instead.
+
+orchestrator.ts (runSwarm):
+- `completed` map = shared blackboard; `remaining` map = worklist.
+- `ready()` = tasks whose EVERY dependsOn id is in completed — topological scheduling.
+- Wave loop: `Promise.all` over all currently-ready tasks (parallelism); empty wave
+  with tasks remaining = cycle/missing dep -> error event + break.
+- Per task: spawn event -> pull deps off blackboard (type guard `(d): d is Done`) ->
+  worker -> validator loop (MAX_RETRIES=1 revision with feedback) -> task.done +
+  blackboard write. Worker THROW -> status failed + error event + blackboard gets
+  "(this subtask failed)" so dependents still proceed (degraded-completion policy).
+- Synthesis: full corpus of all outputs -> runText("synthesizer") -> final answer
+  streams token-by-token; on failure final = raw corpus (fallback).
+- `estTokens = length/4` — demo-grade stats; production should use provider-reported
+  usage.
+- Ends with `run.done {final, tokensIn, tokensOut, ms}` + `bus.close("completed")`.
+
+## Layer 7 — bus.ts: EventBus, the hub
+
+TWO independent jobs in one class:
+
+Job 1 — live handoff (emit <-> async iterator):
+- `queue` = events produced but not yet read; `waiters` = readers waiting with
+  nothing to read.
+- emit(): waiter waiting? resolve it NOW : push to queue.
+- next(): queue non-empty? shift it NOW : park a promise in waiters.
+- Whichever side arrives first leaves something for the other. Zero polling. This is
+  a hand-built async channel (Go channel / asyncio.Queue equivalent) in ~30 lines.
+
+Job 2 — ordered durable delivery (the promise-chain mutex):
+- Every emit wraps the event in an ENVELOPE: `{version: 1, id: runId:seq, runId,
+  sequence: ++this.sequence, occurredAt, event}`.
+- `this.delivery = this.delivery.catch(() => undefined).then(() => this.deliver(envelope))`
+  — each emit APPENDS to one ever-growing promise chain, so deliver() calls execute
+  strictly one-at-a-time in emission order even when parallel workers emit in the
+  same tick. emit() itself is synchronous and never blocks on I/O.
+- `.catch(() => undefined)` keeps the chain alive after a failure — without it, one
+  rejected link would silently stop ALL future persistence (.then on a rejected
+  promise never runs).
+- deliver(): `await persistRunEvent` (Redis FIRST — canonical recoverable record)
+  then `await publishSwarmEvent` (Kafka). Kafka fail after Redis success = event not
+  lost, replayable. Redis fail = Kafka never attempted; `deliveryFailure ??= error`
+  keeps only the FIRST failure.
+- close(status): sets closing (late emits dropped), then finish(): `await
+  this.delivery` (EVERY write from the whole run), then finishRunSession, then wake
+  all parked waiters — resolve done:true normally, REJECT with terminalError on
+  durable-delivery failure, which the route's catch turns into a visible SSE error
+  frame. Guarantee: browser can never see run.done whose data isn't already in Redis.
+
+## Layer 8 — /api/swarm route.ts: the gatekeeper + the stream
+
+Five gates, cheapest first:
+```text
+1. parse JSON (bad JSON -> goal "")     -> 400 invalid goal
+2. goal string >= 4 chars               -> 400
+3. OPENROUTER_API_KEY present (server)  -> 500
+4. assertInfrastructureReady()          -> 503 + retry-after: 5 + per-dep detail
+5. enforceRateLimit(runs:<clientIP>)    -> 429 + retry-after: TTL
+```
+Order matters: infra before rate limit (if Redis is down, the rate limiter would
+throw a MORE CONFUSING error). Client identity: first hop of x-forwarded-for.
+
+Then the core move:
+- `runSwarm(goal, bus)` is called WITHOUT await — fire-and-forget. Awaiting would
+  hold the response until the entire swarm finished, killing live streaming. The
+  attached `.catch` converts any orchestrator crash into an error event +
+  close("failed"); without it: unhandled rejection + an SSE stream that hangs
+  forever.
+- `new ReadableStream({ start(controller) { for await (const event of bus) {
+  controller.enqueue(encoder.encode("data: " + JSON.stringify(event) + "\n\n")) } } })`
+  — the consumer side of the EventBus, framing each event as SSE. TextEncoder:
+  streams carry bytes, not strings. `\n\n` = SSE frame terminator.
+- Response headers: `text/event-stream` (SSE contract), `cache-control:
+  no-cache, no-transform` (no buffering/compression by proxies),
+  `x-murmur-run-id` (client learns the runId for replay).
+- `maxDuration = 300` — platform allows up to 300s of function runtime;
+  `runtime = "nodejs"` — full Node (KafkaJS/ioredis need TCP, not edge).
+
+## Layer 9 — /api/swarm/[runId]/route.ts: replay
+
+- Validates runId shape (`^[0-9a-f-]{36}$`) BEFORE touching Redis — never let
+  unvalidated input become part of a Redis key.
+- `getRunSession` (HGETALL projection) -> 404 if missing/expired.
+- `getRunEvents` (XRANGE - + COUNT 1000) -> full ordered envelope history.
+- Redis down -> 503 + retry-after. Use case: page reload / second tab / post-hoc
+  inspection of a finished run — the SSE stream is gone, Redis still has the story.
+
+## Layer 10 — the browser side (useRunSwarm.ts + store.ts)
+
+useRunSwarm:
+- AbortController: clicking Swarm during a run aborts the previous fetch first —
+  otherwise two streams would write into one store (interleaved chaos).
+- Reads `res.body.getReader()`, TextDecoder with `{stream: true}` (a UTF-8 char can
+  split across chunks), accumulates `buffer`, splits on `\n\n`, keeps the last
+  (possibly incomplete) piece IN the buffer, parses each `data:` line, `apply()`s it.
+
+store.ts (Zustand):
+- `apply(event)` is a reducer: one switch over `event.kind`, each case returns a
+  PARTIAL state update. Discriminated union = each case knows its exact fields.
+- reset(): seeds static Planner + Validator nodes (they always exist in the graph).
+- agent.spawn: creates node; edges — no deps -> planner "assign" edge; deps ->
+  "depends" edges from each upstream agent. `ensureEdge` dedups by id
+  `source->target`.
+- agent.token: `output: a.output + e.delta` — string append per token; this is the
+  live-typing effect.
+- validate.result -> score/feedback onto the node. message events only draw
+  validator edges (review/revise).
+- run.done: builds a SavedRun and `saveRun()`s it (local history — RecentRuns.tsx
+  reads these), sets runStatus done + final + stats.
+- error: runStatus "error" + message (the red banner).
+
+## Master flowchart (end to end)
+
+```text
+Click "Swarm" (GoalBar)
+  -> useRunSwarm: abort old run, reset(goal), fetch POST /api/swarm
+    -> GATES: parse -> validate(400) -> key(500) -> infra ready(503) -> rate limit(429)
+    -> runId = randomUUID(); bus = new EventBus(runId)
+    -> runSwarm(goal, bus)          [fire-and-forget, .catch -> error event + close]
+    -> return Response(ReadableStream reading bus)   [immediately; SSE headers]
+
+runSwarm (background, same process):
+  emit run.start
+  plan(): plan.start -> genObject(planner, Zod) -> plan.token -> plan.done
+          [total failure -> fallbackPlan]
+  wave loop while tasks remain:
+    ready() = deps all completed; empty+remaining = cycle -> error
+    Promise.all(wave):
+      agent.spawn -> blackboard deps -> message edges
+      runWorker: status thinking -> runText(worker chain) -> first delta: status
+                 streaming -> agent.token per delta
+      validate:  status validating -> genObject(validator) -> validate.result
+                 rejected + attempt left -> message revise -> rerun worker w/feedback
+      task.done -> blackboard write
+      THROW -> status failed -> error event -> blackboard "(this subtask failed)"
+  synthesis: agent.spawn synthesizer -> corpus of all outputs -> runText -> agent.token
+             per delta -> run.done {final, stats}    [failure -> final = raw corpus]
+  bus.close("completed")
+
+EVERY emit, in parallel with the above:
+  envelope {v1, runId:seq, sequence, occurredAt}
+  -> delivery chain (strictly ordered): Redis Lua persist (hash+stream, idempotent)
+     -> Kafka producer.send (key=runId, acks=-1, headers)
+  -> live path: resolve waiting SSE reader OR buffer in queue
+  -> route: "data: {...}\n\n" -> HTTP response chunk
+
+close(): await ENTIRE delivery chain -> finishRunSession -> wake readers
+         (reject on durable failure -> visible SSE error frame) -> stream ends
+
+Browser: read chunk -> decode -> split \n\n -> JSON.parse -> apply(event)
+         -> Zustand set -> React re-render (SwarmGraph nodes/edges, SidePanel,
+         token-by-token typing) ; run.done -> saveRun -> RecentRuns
+Replay anytime: GET /api/swarm/<runId> -> Redis projection + full event history
+```
+
+## Failure-mode table (what the user actually sees)
+
+```text
+Failure                        | Where caught              | User sees
+-------------------------------+---------------------------+---------------------------
+Bad/short goal                 | route gate 2              | 400 error banner
+Missing OpenRouter key         | route gate 3              | 500 error banner
+Kafka or Redis down at start   | route gate 4 (readiness)  | 503 "infrastructure
+                               |                           | unavailable" + which dep
+Too many runs per IP           | route gate 5 (Lua INCR)   | 429 + retry-after seconds
+Planner: every model fails     | plan() catch              | run continues w/ generic
+                               |                           | fallback plan
+One worker model fails         | run.ts chain              | next model tried silently
+Worker: every model fails      | orchestrator catch        | node "failed", run continues,
+                               |                           | "(this subtask failed)" in final
+Validator: every model fails   | validate() catch          | auto-approved, score 7 note
+Synthesizer: every model fails | synthesis catch           | final = raw worker outputs
+Redis dies mid-run             | deliver() -> close()      | run finishes streaming, then
+                               |                           | terminal SSE error (durable
+                               |                           | delivery failed)
+Kafka dies mid-run             | deliver() (after Redis ok)| same terminal error; events
+                               |                           | safe in Redis, replayable
+orchestrator itself throws     | route .catch on promise   | error event + close("failed")
+Impossible DAG (cycle)         | wave loop guard           | "unsatisfiable dependency
+                               |                           | cycle" error event
+Reload after run               | [runId] replay route      | session + full event history
+                               |                           | from Redis (404 after TTL)
+```
+
+## Interview answers (master set)
+
+> Architecture in two sentences: Murmur is a Next.js agent-swarm orchestrator where a
+> planner LLM emits a Zod-validated DAG, workers execute it in parallel waves over a
+> shared blackboard with a validator gate and one feedback revision, and a
+> synthesizer fuses outputs. Every lifecycle event flows through a hand-built async
+> EventBus that simultaneously feeds a live SSE stream to the browser and an ordered,
+> idempotent durability pipeline: Redis first (atomic Lua projection + capped stream,
+> the canonical record), then Kafka (runId-keyed, acks=-1, idempotent producer) —
+> with a fail-closed readiness gate so no tokens are spent when infrastructure is down.
+
+> Why not await runSwarm: the route returns the SSE stream immediately and the
+> orchestrator keeps emitting in the background of the same invocation; awaiting
+> would buffer the whole run. The un-awaited promise carries a .catch that converts
+> crashes into a visible error event + failed close — otherwise the stream would
+> hang and Node would report an unhandled rejection.
+
+> Ordering under concurrency: parallel workers emit into one reassigned promise
+> chain (this.delivery), so durable writes execute strictly in emission order
+> without blocking emitters; per-run Kafka ordering additionally comes from keying
+> every message by runId so all of a run's events land on one partition.
+
+> Idempotency, three layers: Redis Lua sequence guard (replay = no-op), deterministic
+> stream IDs (XADD rejects duplicates), idempotent Kafka producer (broker dedups
+> retries).
+
+> Degradation policy: model failures degrade (fallback chains, fallback plan,
+> auto-approve, raw-corpus synthesis, "(subtask failed)" placeholders) but
+> infrastructure failures fail CLOSED (503 before start, terminal SSE error mid-run).
+> Compute is best-effort; the record of what happened is not.
+
+---
+
+# THE CANDIDATE HANDBOOK — Murmur Tech Stack (Session 12)
+
+Read this top to bottom and you can explain the whole project, every technology in
+it, and survive a senior interviewer drilling into any layer.
+
+## 1. Stack at a glance — what we use each tech for
+
+```text
+Layer            | Tech                          | What Murmur uses it for
+-----------------+-------------------------------+------------------------------------------
+Framework        | Next.js (App Router)          | One deployable: React UI + API route
+                 |                               | handlers; server-only secrets; SSE
+                 |                               | streaming responses from route handlers
+Language         | TypeScript                    | Compile-time contracts: discriminated
+                 |                               | union events, Exclude<> business rules,
+                 |                               | Record<> exhaustiveness, type guards
+UI state         | React + Zustand               | apply(event) reducer turns the SSE event
+                 |                               | stream into live graph state
+Graph UI         | React Flow (@xyflow)          | Renders agents as nodes, deps as edges
+AI runtime       | Vercel AI SDK                 | streamText / streamObject /
+                 |                               | generateObject with abort timeouts
+AI provider      | OpenRouter                    | ONE key, MANY models; per-role fallback
+                 |                               | chains; paid-tier probe
+AI contracts     | Zod                           | Runtime schemas for planner plan and
+                 |                               | validator verdict (structured outputs)
+In-process events| Hand-built EventBus           | AsyncIterable queue: many producers
+                 |                               | (parallel agents) -> one consumer (SSE)
+Live transport   | SSE over Web Streams          | data: {...}\n\n frames on a
+                 |                               | ReadableStream; browser parses live
+Shared state     | Redis 8 (ioredis)             | Lua fixed-window rate limits, run
+                 |                               | projection hash, append-only event
+                 |                               | stream for replay (canonical record)
+Event streaming  | Apache Kafka 4 (KafkaJS)      | Durable distributed event log; runId
+                 |                               | key = per-run ordering; acks=-1
+Infra (local)    | Docker + Compose              | Multi-stage image, non-root, KRaft
+                 |                               | Kafka, Redis AOF, health-gated startup
+```
+
+## 2. The full end-to-end flow
+
+```text
+┌─────────────────────────────────────────────────────────────────────────┐
+│ BROWSER (client component)                                              │
+│  GoalBar.tsx → user clicks "Swarm"                                      │
+│  → useRunSwarm.ts: abort any previous run, reset() store, new AbortCtrl │
+│  → fetch("/api/swarm", { method: POST, body: {goal}, signal })          │
+└───────────────────────────────┬───────────────────────────────────────┘
+                                 │  HTTP POST, JSON body
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ SERVER — src/app/api/swarm/route.ts :: POST(req)                        │
+│  1. Parse JSON body → { goal }. Bad JSON → goal = "" (defensive)        │
+│  2. Validate: goal is a string, length >= 4        ──fail──▶ HTTP 400   │
+│  3. Check OPENROUTER_API_KEY exists on server       ──fail──▶ HTTP 500  │
+│  4. assertInfrastructureReady()                     ──fail──▶ HTTP 503  │
+│       └─ pings Kafka admin + Redis PING concurrently, 5s cache          │
+│  5. enforceRateLimit() — Redis Lua INCR+EXPIRE       ──fail──▶ HTTP 429 │
+│  6. runId = crypto.randomUUID()                                         │
+│  7. bus = new EventBus(runId)                                           │
+│  8. runSwarm(goal, bus)  ◄── FIRE-AND-FORGET, NOT awaited               │
+│  9. stream = new ReadableStream({ start(controller) {                   │
+│        for await (const event of bus)                                   │
+│          controller.enqueue(`data: ${JSON.stringify(event)}\n\n`) }})   │
+│ 10. return new Response(stream, { content-type: text/event-stream })    │
+│     ── RETURNS IMMEDIATELY, before runSwarm finishes ──                 │
+└───────────┬───────────────────────────────────────────┬─────────────────┘
+            │ (background, same process)                 │ (HTTP response streams out)
+            ▼                                             │
+┌───────────────────────────────────────┐                 │
+│ runSwarm(goal, bus) — orchestrator.ts  │                 │
+│  emit run.start ──────────────────────────────┐         │
+│  plan(): plan.start → genObject(planner,      │         │
+│    Zod planSchema) → plan.token → plan.done ──┤         │
+│    [all models fail → fallbackPlan]           │  every  │
+│  DAG WAVE LOOP while tasks remain:            │  emit() │
+│    ready() = deps all in completed            │  goes   │
+│    (empty wave + remaining = cycle → error)   │  into   │
+│    Promise.all(wave):                         │  the    │
+│      emit agent.spawn ────────────────────────┤  SAME   │
+│      runWorker: thinking → runText(chain) →   │EventBus │
+│        1st delta: streaming → agent.token ×N ─┤instance │
+│      validate: genObject verdict →            │         │
+│        validate.result ───────────────────────┤         │
+│        rejected+retry left → revise w/feedback│         │
+│      task.done → blackboard write ────────────┤         │
+│      THROW → failed + "(subtask failed)" ─────┤         │
+│  SYNTHESIS: full corpus → runText →           │         │
+│    agent.token ×N → run.done {final,stats} ───┤         │
+│  bus.close("completed")                       │         │
+│    └─ waits for ALL Redis/Kafka writes,       │         │
+│       THEN wakes/ends the SSE reader loop     │         │
+└─────────────────────────────────────────┘     │         │
+                                                 ▼         ▼
+                                   ┌──────────────────────────┐
+                                   │ Inside EventBus per emit: │
+                                   │  envelope {v1, runId:seq, │
+                                   │   sequence, occurredAt}   │
+                                   │  → delivery promise chain │
+                                   │    (strict order):        │
+                                   │    1. persistRunEvent     │
+                                   │       Redis Lua: hash +   │
+                                   │       stream, idempotent  │
+                                   │    2. publishSwarmEvent   │
+                                   │       Kafka key=runId,    │
+                                   │       acks=-1             │
+                                   │  → live path: resolve     │
+                                   │    waiting reader OR queue│
+                                   └──────────────────────────┘
+                                                 │
+                                                 ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ BROWSER — useRunSwarm.ts reads the response body                        │
+│  reader = res.body.getReader()                                          │
+│  loop: read() → TextDecoder(stream:true) → buffer → split "\n\n"        │
+│        → keep last partial in buffer → parse "data: " → JSON.parse      │
+│  apply(event) → Zustand reducer → React re-renders SwarmGraph/SidePanel │
+│  run.done → saveRun() → RecentRuns history                              │
+│  Anytime later: GET /api/swarm/<runId> replays session+events from Redis│
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+Numbered narrative (memorize this as your walkthrough):
+1. Click → `useRunSwarm` aborts any previous run (AbortController), resets the
+   store, POSTs the goal.
+2. Route runs five gates cheapest-first: parse → length → server key → infra
+   readiness → rate limit. Nothing costs an AI token until all five pass.
+3. `runId = randomUUID()`; one `EventBus` per run.
+4. `runSwarm` starts WITHOUT await — the response (an SSE `ReadableStream`) returns
+   immediately; orchestrator keeps emitting in the background of the invocation.
+5. Planner produces a Zod-validated DAG (2–4 tasks) or a generic fallback plan.
+6. Wave loop: all tasks whose dependencies are complete run concurrently
+   (`Promise.all`); blackboard (`completed` map) feeds upstream outputs into
+   downstream prompts.
+7. Each worker streams tokens (every delta = one SSE frame), then faces the
+   validator: approved needs model-approved AND score ≥ 7; one feedback revision.
+8. Worker total failure → node marked failed, `"(this subtask failed)"` placed on
+   the blackboard so dependents proceed (degraded completion).
+9. Synthesizer fuses the full corpus into the final answer, streaming live.
+10. EVERY emit also flows down the durability chain: Redis first (atomic Lua:
+    projection hash + capped stream, idempotent), then Kafka (runId-keyed,
+    acks=-1). One promise chain serializes writes in emission order.
+11. `close()` waits for the entire delivery chain before ending the SSE stream — the
+    browser can never see `run.done` that isn't already durable. Durable failure →
+    terminal SSE error frame.
+12. Browser parses frames, `apply()` reduces each event into graph state; reload or
+    share → `GET /api/swarm/[runId]` replays everything from Redis.
+
+## 3. Important routes reference
+
+```text
+Method | Path                  | Purpose             | Success            | Failures
+-------+-----------------------+---------------------+--------------------+--------------------------
+POST   | /api/swarm            | start run, stream   | 200 SSE stream +   | 400 bad goal, 500 no key,
+       |                       | events live         | x-murmur-run-id    | 503 infra, 429 rate+retry-after
+GET    | /api/swarm/[runId]    | replay a run from   | 200 {session,      | 400 bad uuid, 404 expired/
+       |                       | Redis               | events[]}          | unknown, 503 Redis down
+GET    | /api/health           | readiness probe     | 200 ready +        | 503 not_ready + which dep,
+       |                       | (force, uncached)   | per-dep latencyMs  | cache-control: no-store
+```
+Route-handler facts interviewers probe: `runtime = "nodejs"` (KafkaJS/ioredis need
+raw TCP — Edge runtime is fetch-only), `maxDuration = 300` (long-lived SSE budget),
+`dynamic = "force-dynamic"` on health (never pre-render/cache a readiness answer),
+dynamic params are async in Next 15 (`context.params` is a Promise — must await).
+
+## 4. Redis — everything a candidate must know here
+
+Data structures Murmur actually uses:
+```text
+Structure | Key                          | Used for
+----------+------------------------------+----------------------------------
+string    | murmur:rate:runs:<ip>        | fixed-window run counter (INCR)
+string    | murmur:rate:model:<role>:<m> | fixed-window model-call counter
+hash      | murmur:run:<runId>           | run projection (status/goal/final)
+stream    | murmur:run:<runId>:events    | append-only envelope history
+```
+
+Why Lua is atomic: Redis executes commands on a SINGLE thread; an EVAL script runs
+as one uninterruptible command — no other client's command can interleave. That's
+the whole atomicity story (no locks involved).
+
+Rate-limiting algorithms — know all five, know which we picked and why:
+```text
+Algorithm              | How it works                       | Cost      | Weakness
+-----------------------+------------------------------------+-----------+------------------
+Fixed window  (USED)   | INCR counter, EXPIRE at window     | O(1), 1   | 2x burst across
+                       | start; reject when count > limit   | key       | window boundary
+Sliding window log     | ZADD timestamp per request,        | O(log n)  | memory per request
+                       | ZREMRANGEBYSCORE old, ZCARD count  | + big keys|
+Sliding window counter | weighted blend of current+previous | O(1)      | approximation
+                       | fixed windows                      |           |
+Token bucket           | refill tokens at rate r up to      | O(1), Lua | needs timestamp
+                       | burst b; take 1 per request        |           | math per call
+Leaky bucket           | queue drains at constant rate      | O(1)      | adds latency,
+                       |                                    |           | queue to manage
+```
+Murmur uses fixed window: simplest correct distributed limiter, one key, one Lua
+round trip. Known tradeoff: boundary burst (limit at 23:59:59 + limit at 00:00:01).
+Upgrade path when abuse matters: token bucket in Lua.
+
+Other Redis facts to be fluent in:
+- TTL discipline: every Murmur key expires (window TTL or 86400s run TTL) — Redis
+  is not unbounded storage; at maxmemory Redis evicts per policy or rejects writes.
+- Persistence: RDB = periodic snapshots (fast, can lose last minutes); AOF =
+  append-only command log (our Compose uses appendfsync everysec — lose ≤1s).
+- Redis Streams vs Kafka: Streams are great for one-app replay buffers (that's our
+  use); Kafka wins for multi-consumer-group fan-out, huge retention, partitioned
+  horizontal scale, ecosystem (Connect, ksqlDB).
+- MULTI/EXEC vs Lua: MULTI batches commands atomically but cannot branch on a read;
+  Lua can (our sequence guard needs the read-then-decide, so it must be Lua).
+
+## 5. Kafka — everything a candidate must know here
+
+Core vocabulary: broker (server), topic (named log), partition (ordered shard of a
+topic), offset (position in a partition), producer/consumer, consumer group (set of
+consumers sharing partitions — each partition is read by exactly ONE member),
+ISR (in-sync replicas), retention (time/size the log is kept), lag (how far a
+consumer is behind the head).
+
+Murmur's exact choices and the why:
+- `key: runId` → Kafka hashes the key to pick a partition → ALL events of one run
+  land on one partition → strict per-run ordering. Scope matters: ordering is per
+  PARTITION, never per topic.
+- 6 partitions → up to 6 consumers in one group can process runs in parallel.
+- `acks: -1` → producer waits for all in-sync replicas; safest, slowest. With local
+  replication-factor 1 it's just the leader; production wants RF=3 + min.insync.replicas=2.
+- `idempotent: true` → broker deduplicates producer retries (sequence numbers per
+  producer/partition) → no duplicates from network retries = at-least-once upgraded
+  to effectively-once FOR THE PRODUCER SIDE.
+- `allowAutoTopicCreation: false` → an auto-created topic would get default
+  partitions/retention; topics are provisioned by infra (compose kafka-init:
+  6 partitions, retention.ms=604800000 = 7 days).
+- `pingKafka` uses an ADMIN client and checks the topic EXISTS — "broker reachable"
+  is not "topic usable".
+- Headers (eventKind/eventVersion/eventId) let consumers filter without parsing
+  values; version field = schema evolution story.
+- KRaft = Kafka's built-in Raft consensus (no ZooKeeper since Kafka 4).
+- Known gap (say it before they ask): Redis write and Kafka publish are two systems
+  with no shared transaction. We order Redis-first so the canonical record never
+  lags, and fail visibly on Kafka error. The textbook fix is a TRANSACTIONAL
+  OUTBOX: write the event into the same store as state, a relay publishes to Kafka
+  with retries, guaranteeing no gaps.
+
+## 6. Senior interview Q&A per tech
+
+Next.js / API design:
+- Q: Why Node runtime, not Edge? A: KafkaJS and ioredis speak raw TCP; Edge runtime
+  exposes only fetch/web APIs. Also long-lived SSE + heavier CPU fits Node.
+- Q: Why SSE and not WebSockets? A: The flow is strictly server→client, one
+  direction. SSE rides plain HTTP (no upgrade), works through proxies/CDNs,
+  auto-frames with data:...\n\n, and needs zero extra infra. WebSockets buy
+  bidirectionality we don't need at the cost of connection-state management.
+- Q: How do you keep the API key safe? A: It only exists in server env; the only
+  code touching it is a route handler; the browser gets events, never credentials.
+- Q: What limits streaming on serverless? A: Function wall-clock (maxDuration 300s),
+  and the platform must support streamed responses; buffering proxies must be told
+  no-transform.
+
+TypeScript:
+- Q: How do you make invalid states unrepresentable? A: String-literal unions for
+  statuses, Exclude<> so a task can never be typed as planner/validator/synthesizer,
+  Record<AgentType,...> so a missing agent config is a compile error, discriminated
+  union events so each kind has exactly its fields.
+- Q: TS vs Zod — why both? A: TS types vanish at runtime; LLM output arrives at
+  runtime. Zod validates the actual data and INFERS the static type from the same
+  schema — one source of truth for both worlds.
+
+AI SDK / OpenRouter / Zod:
+- Q: What happens when a model returns malformed JSON for a schema? A: generateObject
+  throws, the executor catches, the chain falls through to the next model; if all
+  fail, AllModelsFailed propagates to the role's degradation policy.
+- Q: How do you control cost? A: Workers (many, parallel) are pinned to free models
+  even on a paid key; Claude only heads planner/validator/synthesizer chains
+  (run once or twice per swarm). Per-model rate limits cap spend; 40s abort per
+  attempt stops runaway calls.
+- Q: How do you trust a model's self-reported verdict? A: We don't — code enforces
+  approved && score >= 7 so an inconsistent verdict can't pass work.
+
+SSE / Streams:
+- Q: Walk me through frame parsing client-side. A: Bytes → TextDecoder(stream:true)
+  because a UTF-8 char can split across chunks → append to buffer → split on \n\n →
+  the LAST piece may be incomplete so it stays in the buffer → each complete chunk's
+  data: payload is JSON.parsed.
+- Q: Client disconnects mid-run — what happens? A: The response stream is cancelled;
+  the orchestrator keeps running server-side and every event still lands in
+  Redis/Kafka; the client replays via GET /api/swarm/[runId].
+
+EventBus / concurrency:
+- Q: How do you serialize concurrent async writes without a mutex library? A:
+  Reassign one promise chain: delivery = delivery.catch(noop).then(next). Appending
+  is synchronous, execution is strictly ordered, emitters never block on I/O.
+- Q: Why .catch in the middle of the chain? A: A rejected link would make every
+  subsequent .then dead — one failure would silently stop ALL future persistence.
+- Q: Backpressure? A: The in-memory queue is unbounded; a slow reader grows it. Fine
+  for one browser per run; a production multi-consumer story belongs in Kafka, which
+  has real backpressure via consumer pull.
+
+Redis:
+- Q: Why is your rate limiter a Lua script? A: INCR and EXPIRE must be atomic; two
+  round trips race (double-EXPIRE or a crash strands a counter with no TTL —
+  permanent rate-limit). Single-threaded Redis executes the script as one command.
+- Q: Fixed-window weakness? A: 2x burst at the boundary; fix = token bucket/sliding
+  window at higher cost.
+- Q: How is replay idempotent? A: Lua sequence guard (replay = no-op) + deterministic
+  stream ID sequence-0 (XADD rejects duplicate/lower IDs).
+
+Kafka:
+- Q: What ordering does Kafka give you? A: Per partition. We key by runId so a run's
+  events share a partition; cross-run ordering doesn't exist and doesn't matter.
+- Q: Delivery semantics? A: Producer side: acks=-1 + idempotence = no loss, no dupes
+  from retries. End-to-end exactly-once needs transactions/outbox + idempotent
+  consumers — we state that honestly as the roadmap.
+- Q: What is consumer lag and why watch it? A: head offset minus committed offset;
+  growing lag = consumers can't keep up = staleness/backpressure alarm.
+
+Architecture / system design:
+- Q: Two-minute pitch — see "Interview answers (master set)" above.
+- Q: Scale this 100x? A: Move orchestration out of the request into a worker/queue
+  (BullMQ/Temporal), SSE from a read path fed by Redis/Kafka instead of in-process
+  bus, managed RF=3 Kafka, Redis cluster, outbox relay, per-user auth + quotas,
+  observability (lag, p95, token spend).
+- Q: Biggest honest weakness? A: Redis→Kafka has no shared transaction (outbox is
+  the fix), orchestration dies with the serverless invocation (job queue is the
+  fix), estTokens is length/4 (use provider usage), retry chain treats
+  non-retryable errors as retryable (shouldFallback gap).
+
+## 7. Rapid-fire glossary
+
+```text
+SSE            server-sent events: one-way HTTP stream, data:...\n\n frames
+ReadableStream web API producing chunks for a streaming HTTP body
+AsyncIterable  object usable with for await...of (has Symbol.asyncIterator)
+envelope       event wrapper adding version/id/runId/sequence/occurredAt
+blackboard     shared map of completed task outputs consumed by dependents
+DAG            directed acyclic graph — tasks + dependsOn edges
+wave           set of tasks whose dependencies are all complete, run concurrently
+fail closed    refuse work when a required dependency is down
+readiness      "can I serve NOW?" — deps checked, vs liveness "am I running?"
+projection     current-state summary derived from an event history
+idempotent     safe to apply twice; second application is a no-op
+fixed window   rate limit algorithm: counter per time bucket
+partition      ordered shard of a Kafka topic; unit of parallelism + ordering
+consumer group consumers sharing a topic; each partition -> one member
+offset / lag   position in a partition / how far behind a consumer is
+acks=-1        producer waits for all in-sync replicas
+KRaft          Kafka's ZooKeeper-free Raft consensus mode
+AOF            Redis append-only-file persistence (fsync every second here)
+outbox         pattern: stage events in the state store, relay to the log
+multi-stage    Dockerfile with several FROMs; final image ships runtime only
+```
+
+---
+
+# Placement handbook canonical pointer and accuracy corrections (2026-07-16)
+
+The canonical, code-verified placement guide is `Murmur_Placement_Handbook.md` and its rendered PDF. It supersedes conflicting statements in older learning notes. Keep the earlier sections as session history, but use these corrections in interviews:
+
+1. **Live before durable:** `EventBus.emit()` sends the plain event to its local SSE queue immediately and schedules Redis→Kafka separately. The browser can see `run.done` before its remote delivery finishes. `close()` waits for the delivery chain before ending the stream; it does not make every visible event durable first.
+2. **Replay is not wired into the UI:** `GET /api/swarm/[runId]` exists, but `useRunSwarm` does not call it on reload/reconnect. The route returns at most 1,000 events by default, not necessarily the full retained stream.
+3. **Client abort is not job cancellation:** aborting the fetch stops the browser request/reader. Its signal is not propagated into the backend EventBus or model calls, so orchestration can continue.
+4. **Kafka is producer-only here:** the repository publishes events and performs topic readiness checks. There is no Kafka consumer, consumer group implementation, lag metric, or Kafka-fed SSE path.
+5. **No end-to-end exactly once:** `acks=-1` plus Kafka producer idempotence narrows broker retry risk. Redis and Kafka do not share a transaction, and no idempotent consumer side effect is implemented.
+6. **Kafka event failure can leave a gap:** Redis is written first. If Kafka event 7 fails, later Kafka events are still attempted; Redis may contain the complete sequence while Kafka has 1–6 and 8 onward. The terminal stream reports durable-delivery failure.
+7. **Validator is availability-biased:** total validator-model failure returns auto-approved score 7. After one rejected revision, the orchestrator exits the retry loop even if the second verdict is rejected.
+8. **Planner degradation:** planner-model failure is caught inside `plan()` and replaced with a generic two-task plan.
+9. **Retry classifier bug:** in `runText`, both outcomes of the `shouldFallback` check continue to the next model. Non-retryable failures are currently retried too.
+10. **Local infrastructure is not HA:** Kafka is one combined KRaft broker/controller with replication factor 1; Redis is one node. Both are required for new runs, but Compose is a development/CI topology.
+11. **Current dependency names:** the UI package is `reactflow` 11, not `@xyflow/react`. AI SDK 6 still runs the current object APIs but documents `generateObject`/`streamObject` as deprecated.
+12. **Testing boundary:** no automated test suite or test script currently exists. Do not claim full production verification.
+
+Interview wording to memorise:
+
+> Murmur deeply uses Redis for distributed quotas and recoverable run state. It publishes every run event to Kafka with per-run partition ordering, but the repository currently demonstrates only the producer side. The next correctness step is a transactional outbox, idempotent consumer, durable worker, and replay/cancellation UI.

@@ -1,5 +1,6 @@
 import { EventBus } from "./bus";
 import { plan } from "./planner";
+import { nextWave } from "./dagSchedule";
 import { runWorker } from "./worker";
 import { validate } from "./validator";
 import { runText } from "./run";
@@ -46,14 +47,9 @@ export async function runSwarm(goal: string, bus: EventBus) {
   // they are selected for an execution wave.
   const remaining = new Map(plannedPlan.tasks.map((t) => [t.id, t]));
 
-  // A task is ready only when every dependency ID exists in completed.
-  // This is the core topological scheduling rule for the DAG.
-  const ready = () =>
-    [...remaining.values()].filter((t) => t.dependsOn.every((d) => completed.has(d)));
-
   // Execute the DAG in waves of independent tasks.
   while (remaining.size > 0) {
-    const wave = ready();
+    const wave = nextWave([...remaining.values()], new Set(completed.keys()));
     if (wave.length === 0) {
       // If tasks remain but none are ready, the graph has an impossible
       // dependency shape: a cycle, missing dependency, or invalid task id.
