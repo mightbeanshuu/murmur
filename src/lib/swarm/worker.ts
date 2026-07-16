@@ -35,6 +35,7 @@ export async function runWorker(
   deps: { title: string; output: string }[],
   bus: EventBus,
   feedback?: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   bus.emit({ kind: "agent.status", id: agentId, status: feedback ? "retrying" : "thinking" });
 
@@ -59,6 +60,7 @@ export async function runWorker(
       // Each token delta is streamed to the frontend through SSE.
       bus.emit({ kind: "agent.token", id: agentId, delta });
     },
+    signal,
   });
   return text;
 }

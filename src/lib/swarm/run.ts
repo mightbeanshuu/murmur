@@ -1,47 +1,75 @@
 import { generateObject, streamObject, streamText } from "ai";
 import type { z } from "zod";
 import { chainFor, model, type Role } from "./models";
-import { enforceRateLimit, MODEL_RATE_LIMIT, rateLimitKey } from "./rateLimit";
+import { enforceRateLimit, MODEL_RATE_LIMIT, rateLimitKey, RateLimitError } from "./rateLimit";
 
 // Per-attempt wall-clock budget. A model that accepts the request but never returns
 // (common on congested free tiers) is aborted so the executor falls through.
 const TIMEOUT_MS = Number(process.env.MURMUR_ATTEMPT_TIMEOUT_MS ?? 40000);
 
 // Treat rate-limit (429), payment-required (402, i.e. paid model on a free key),
-// timeout (408), and 5xx as "try the next model in the chain".
+// timeout (408), and 5xx as "try the next model in the chain". Anything else
+// (a bad schema, a programming error) is NOT retryable — walking the rest of
+// the chain would just waste time failing the same way on every other model.
 function shouldFallback(e: unknown): boolean {
   const err = e as { statusCode?: number; status?: number; message?: string };
   const code = err?.statusCode ?? err?.status;
   if (code && (code === 429 || code === 402 || code === 408 || code >= 500)) return true;
   const m = (err?.message ?? "").toLowerCase();
-  return m.includes("rate-limit") || m.includes("rate limit") || m.includes("429") || m.includes("quota");
+  return (
+    m.includes("rate-limit") ||
+    m.includes("rate limit") ||
+    m.includes("429") ||
+    m.includes("quota") ||
+    m.includes("empty completion") // model responded but produced nothing; another model may not
+  );
 }
 
-class AllModelsFailed extends Error {
+export class AllModelsFailed extends Error {
   constructor(role: string, last: unknown) {
     super(`All models failed for ${role}: ${(last as Error)?.message ?? last}`);
+  }
+}
+
+/** Combines the per-attempt timeout with an optional caller-provided cancellation signal. */
+function attemptSignal(external?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(TIMEOUT_MS);
+  return external ? AbortSignal.any([timeout, external]) : timeout;
+}
+
+/**
+ * Runs the rate-limit check for one model in the chain. A `RateLimitError`
+ * means THIS model's own quota is exhausted — fine to try the next model.
+ * Any OTHER error (e.g. Redis is unreachable) means every model in the chain
+ * would fail identically, so it's rethrown immediately instead of being
+ * silently absorbed as "model unavailable".
+ */
+async function checkModelRateLimit(role: Role, id: string): Promise<"ok" | "skip"> {
+  try {
+    await enforceRateLimit({ key: rateLimitKey("model", `${role}:${id}`), ...MODEL_RATE_LIMIT });
+    return "ok";
+  } catch (e) {
+    if (e instanceof RateLimitError) return "skip";
+    throw e;
   }
 }
 
 /** Stream plain text, walking the model chain on rate-limit/unavailability. */
 export async function runText(
   role: Role,
-  opts: { system: string; prompt: string; onDelta: (d: string) => void },
+  opts: { system: string; prompt: string; onDelta: (d: string) => void; signal?: AbortSignal },
 ): Promise<{ text: string; modelId: string }> {
   const chain = await chainFor(role);
   let last: unknown;
   for (const id of chain) {
+    if (await checkModelRateLimit(role, id) === "skip") continue;
     try {
-      await enforceRateLimit({
-        key: rateLimitKey("model", `${role}:${id}`),
-        ...MODEL_RATE_LIMIT,
-      });
       const res = streamText({
         model: model(id),
         system: opts.system,
         prompt: opts.prompt,
         maxRetries: 0,
-        abortSignal: AbortSignal.timeout(TIMEOUT_MS),
+        abortSignal: attemptSignal(opts.signal),
       });
       let text = "";
       for await (const delta of res.textStream) {
@@ -52,7 +80,7 @@ export async function runText(
       return { text, modelId: id };
     } catch (e) {
       last = e;
-      if (!shouldFallback(e)) continue; // try next model regardless; only bail when chain is exhausted
+      if (!shouldFallback(e)) throw new AllModelsFailed(role, e); // non-retryable: fail fast
     }
   }
   throw new AllModelsFailed(role, last);
@@ -61,23 +89,26 @@ export async function runText(
 /** Stream a structured object (used by the planner), walking the chain on failure. */
 export async function runObject<T>(
   role: Role,
-  opts: { schema: z.ZodType<T>; system: string; prompt: string; onPartial?: (o: Partial<T>) => void },
+  opts: {
+    schema: z.ZodType<T>;
+    system: string;
+    prompt: string;
+    onPartial?: (o: Partial<T>) => void;
+    signal?: AbortSignal;
+  },
 ): Promise<{ object: T; modelId: string }> {
   const chain = await chainFor(role);
   let last: unknown;
   for (const id of chain) {
+    if (await checkModelRateLimit(role, id) === "skip") continue;
     try {
-      await enforceRateLimit({
-        key: rateLimitKey("model", `${role}:${id}`),
-        ...MODEL_RATE_LIMIT,
-      });
       const res = streamObject({
         model: model(id),
         schema: opts.schema,
         system: opts.system,
         prompt: opts.prompt,
         maxRetries: 0,
-        abortSignal: AbortSignal.timeout(TIMEOUT_MS),
+        abortSignal: attemptSignal(opts.signal),
       });
       if (opts.onPartial) {
         for await (const partial of res.partialObjectStream) opts.onPartial(partial as Partial<T>);
@@ -85,6 +116,7 @@ export async function runObject<T>(
       return { object: (await res.object) as T, modelId: id };
     } catch (e) {
       last = e;
+      if (!shouldFallback(e)) throw new AllModelsFailed(role, e);
     }
   }
   throw new AllModelsFailed(role, last);
@@ -93,27 +125,25 @@ export async function runObject<T>(
 /** Non-streaming structured object (used by the validator), walking the chain on failure. */
 export async function genObject<T>(
   role: Role,
-  opts: { schema: z.ZodType<T>; system: string; prompt: string },
+  opts: { schema: z.ZodType<T>; system: string; prompt: string; signal?: AbortSignal },
 ): Promise<{ object: T; modelId: string }> {
   const chain = await chainFor(role);
   let last: unknown;
   for (const id of chain) {
+    if (await checkModelRateLimit(role, id) === "skip") continue;
     try {
-      await enforceRateLimit({
-        key: rateLimitKey("model", `${role}:${id}`),
-        ...MODEL_RATE_LIMIT,
-      });
       const { object } = await generateObject({
         model: model(id),
         schema: opts.schema,
         system: opts.system,
         prompt: opts.prompt,
         maxRetries: 0,
-        abortSignal: AbortSignal.timeout(TIMEOUT_MS),
+        abortSignal: attemptSignal(opts.signal),
       });
       return { object: object as T, modelId: id };
     } catch (e) {
       last = e;
+      if (!shouldFallback(e)) throw new AllModelsFailed(role, e);
     }
   }
   throw new AllModelsFailed(role, last);

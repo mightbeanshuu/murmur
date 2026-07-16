@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { genObject } from "./run";
+import { AllModelsFailed, genObject } from "./run";
 import type { SwarmTask } from "./types";
 
 // Structured verdict schema: the validator must return a score, boolean
@@ -23,7 +23,7 @@ export interface Verdict {
   feedback: string;
 }
 
-export async function validate(task: SwarmTask, output: string): Promise<Verdict> {
+export async function validate(task: SwarmTask, output: string, signal?: AbortSignal): Promise<Verdict> {
   try {
     // The validator judges the worker output against the original task brief,
     // not against the final user goal. This keeps validation scoped and concrete.
@@ -31,6 +31,7 @@ export async function validate(task: SwarmTask, output: string): Promise<Verdict
       schema,
       system: SYSTEM,
       prompt: `Brief:\nTask "${task.title}": ${task.brief}\n\nWorker output:\n${output}`,
+      signal,
     });
     return {
       // Code-level guardrail: approval requires both the model's boolean and
@@ -39,8 +40,11 @@ export async function validate(task: SwarmTask, output: string): Promise<Verdict
       score: object.score,
       feedback: object.feedback,
     };
-  } catch {
-    // If every validator model is rate-limited, don't block the run — pass the work through.
+  } catch (e) {
+    // Only auto-approve when every validator MODEL was genuinely exhausted.
+    // An infrastructure error must not be silently treated as "validator
+    // unavailable" — that would mask a real outage as ordinary AI flakiness.
+    if (!(e instanceof AllModelsFailed)) throw e;
     // Production improvement: mark this as "unvalidated" instead of silently
     // treating it as a normal approved result.
     return { approved: true, score: 7, feedback: "Validator unavailable; auto-approved." };

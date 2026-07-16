@@ -30,7 +30,10 @@ const ENV_OVERRIDE: Record<Role, string | undefined> = {
   synthesizer: process.env.MURMUR_SYNTH_MODEL,
 };
 
-// One-time probe: does this key have paid access? Cached for the process lifetime.
+// Cached probe: does this key have paid access? A SUCCESSFUL result (true or
+// false) is cached for the process lifetime. A probe FAILURE (network error,
+// bad response) is not cached, so a transient blip doesn't permanently pin
+// this process to the free-only chain for its entire lifetime.
 let paidProbe: Promise<boolean> | null = null;
 function hasPaidAccess(): Promise<boolean> {
   if (process.env.MURMUR_FORCE_PAID === "1") return Promise.resolve(true);
@@ -41,7 +44,11 @@ function hasPaidAccess(): Promise<boolean> {
     })
       .then((r) => r.json())
       .then((j) => j?.data?.is_free_tier === false)
-      .catch(() => false);
+      .catch((error) => {
+        paidProbe = null; // let the next call retry instead of caching a failure
+        console.error("Paid-access probe failed; treating as free tier for this call", error);
+        return false;
+      });
   }
   return paidProbe;
 }

@@ -80,7 +80,9 @@ export async function POST(req: Request) {
 
   // Kick off the run; failures are surfaced as an error event then close.
   // The route returns the stream immediately while runSwarm keeps emitting.
-  runSwarm(goal.trim(), bus).catch(async (e) => {
+  // req.signal fires when the client disconnects, letting the orchestrator
+  // stop spending tokens instead of continuing invisibly in the background.
+  runSwarm(goal.trim(), bus, req.signal).catch(async (e) => {
     bus.emit({ kind: "error", message: (e as Error).message });
     try {
       await bus.close("failed");

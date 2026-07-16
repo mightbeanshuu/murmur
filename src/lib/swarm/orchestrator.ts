@@ -21,8 +21,12 @@ interface Done {
  * Drives a full swarm run, emitting events onto the bus. Tasks whose dependencies
  * are all satisfied run concurrently; each is gated by the validator with one
  * self-correcting retry. A synthesizer fuses the outputs into the final answer.
+ *
+ * `signal` is the client request's abort signal. If the client disconnects
+ * (closes the tab, aborts the fetch), the run stops spending tokens at the
+ * next checkpoint instead of continuing invisibly in the background.
  */
-export async function runSwarm(goal: string, bus: EventBus) {
+export async function runSwarm(goal: string, bus: EventBus, signal?: AbortSignal) {
   const t0 = Date.now();
   let tokensOut = 0;
   let tokensIn = estTokens(goal);
@@ -31,7 +35,7 @@ export async function runSwarm(goal: string, bus: EventBus) {
 
   let plannedPlan: SwarmPlan;
   try {
-    plannedPlan = await plan(goal, bus);
+    plannedPlan = await plan(goal, bus, signal);
   } catch (e) {
     bus.emit({ kind: "error", message: `Planner failed: ${(e as Error).message}` });
     await bus.close("failed");
@@ -49,6 +53,11 @@ export async function runSwarm(goal: string, bus: EventBus) {
 
   // Execute the DAG in waves of independent tasks.
   while (remaining.size > 0) {
+    if (signal?.aborted) {
+      bus.emit({ kind: "error", message: "Run cancelled: client disconnected." });
+      await bus.close("failed");
+      return;
+    }
     const wave = nextWave([...remaining.values()], new Set(completed.keys()));
     if (wave.length === 0) {
       // If tasks remain but none are ready, the graph has an impossible
@@ -86,14 +95,14 @@ export async function runSwarm(goal: string, bus: EventBus) {
         tokensIn += estTokens(task.brief) + depContext.reduce((n, d) => n + estTokens(d.output), 0);
 
         try {
-          let output = await runWorker(agentId, task, depContext, bus);
+          let output = await runWorker(agentId, task, depContext, bus, undefined, signal);
           tokensOut += estTokens(output);
 
           // Validator gate with one self-correcting retry.
           for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             bus.emit({ kind: "agent.status", id: agentId, status: "validating" });
             bus.emit({ kind: "message", from: agentId, to: "validator", label: "review" });
-            const verdict = await validate(task, output);
+            const verdict = await validate(task, output, signal);
             bus.emit({
               kind: "validate.result",
               id: agentId,
@@ -107,7 +116,7 @@ export async function runSwarm(goal: string, bus: EventBus) {
             // Feedback-based self-correction: the same worker reruns with the
             // validator's concrete feedback appended to its prompt.
             bus.emit({ kind: "message", from: "validator", to: agentId, label: "revise" });
-            output = await runWorker(agentId, task, depContext, bus, verdict.feedback);
+            output = await runWorker(agentId, task, depContext, bus, verdict.feedback, signal);
             tokensOut += estTokens(output);
           }
 
@@ -124,6 +133,12 @@ export async function runSwarm(goal: string, bus: EventBus) {
         }
       }),
     );
+  }
+
+  if (signal?.aborted) {
+    bus.emit({ kind: "error", message: "Run cancelled: client disconnected." });
+    await bus.close("failed");
+    return;
   }
 
   // Synthesis pass.
@@ -159,6 +174,7 @@ export async function runSwarm(goal: string, bus: EventBus) {
         final += delta;
         bus.emit({ kind: "agent.token", id: synthId, delta });
       },
+      signal,
     });
     final = res.text;
     tokensOut += estTokens(final);

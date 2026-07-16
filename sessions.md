@@ -190,6 +190,26 @@
 - **Learner Gaps:** Two older checkpoints (S9 fallback chain, S10 nullable output) still open; new S14 checkpoint added to the queue.
 - **Next Session Focus:** Kafka intentionally deferred per learner request. Remaining: reliable orchestration architecture, observability/cost/security, DevOps/deployment (blocked on Vercel Redpanda+Redis Cloud signups), Next.js session (deferred to very end), senior interview prep (last).
 
+## Session 16 — Production-readiness fixes implemented
+- **Route:** Basic to Interview, Phase 2
+- **Prerequisite Check:** Learner asked for the correct fault list AND actual fixes to make orchestration reliable, plus a clear split of "fixed now" vs "legitimate later, not currently required."
+- **Concepts Reinforced:** Every fault discussed in the audit sessions was traced to a real, verified line of code before being fixed (not assumed from memory) — good practice modeled: verify, then fix.
+- **Implementation Work:** Fixed `hasPaidAccess` permanent-poisoning bug, made `shouldFallback` actually gate the retry loop, distinguished infra errors (Redis down) from genuine model exhaustion across `run.ts`/`planner.ts`/`validator.ts` (only `AllModelsFailed` triggers graceful degradation now), removed dead try/catch in `rateLimit.ts`, wired real cancellation propagation from `route.ts`'s `req.signal` down through `orchestrator.ts` → `worker.ts`/`validator.ts`/`planner.ts`/synthesis `runText`. Full detail in `progress.md`.
+- **Deliberately not implemented (given to learner as a "further upgrade, not urgently required" list):** transactional outbox, durable/resumable workflow engine (BullMQ/Temporal/Inngest), EventBus backpressure bounding, dead-letter queue, real auth/multi-tenancy, observability stack, real token-usage accounting.
+- **Verification:** typecheck clean, 15/15 tests passed, lint clean.
+- **Next Session Focus:** Commit/push this work; continue with reliable-orchestration-architecture theory (job queues, outbox pattern in more depth) once infra/testing topics are settled, or move to whichever topic the learner picks next.
+
+## Checkpoint resolution (before Session 15)
+- **S9 (fallback chain):** Tutor walked the answer — `throw new Error("empty completion")` in `runText` is a non-network condition that still triggers the `continue` (harmless here since retrying is actually correct for empty output, but demonstrates `shouldFallback`'s check doesn't gate anything real).
+- **S10 (nullable output):** Tutor walked the answer — `estTokens(d.output)` calling `.length` on `null` would throw at runtime; TypeScript narrowing would force `?? ""` guards everywhere `output` is read, converting a latent runtime bug into a compile-time one.
+- **S14 (Lua guard strictness):** Tutor walked the answer — `current > sequence` vs `current >= sequence` behave IDENTICALLY on the out-of-order/stale-sequence case tested; they diverge only on the EXACT-REPLAY case (`current === sequence`), where `>` would incorrectly let a duplicate through. Learner's instinct to ask about stale-sequence was reasonable but the real bug surface is the replay-idempotency test, not the ordering test.
+- All three checkpoints closed by tutor explanation (learner did not independently answer before requesting a move to the next session).
+
+## Session 15 — Reliable orchestration architecture (starting)
+- **Route:** Basic to Interview, Phase 2
+- **Prerequisite Check:** Learner requested checkpoints closed first, then this topic; Kafka still explicitly deferred.
+- **Planned Concepts:** Background job queues vs. in-request orchestration; durable workflow state surviving process restarts; cancellation propagation; backpressure; retries with jitter; dead-letter handling; idempotency at the workflow level; the transactional outbox pattern (closing the Redis→Kafka gap flagged since Session 8); BullMQ/Temporal/Inngest vs. custom worker comparison.
+
 ## Session 13 — Placement handbook and interview mastery artifact
 - **Route:** Basic to Interview, architecture-first, fast pacing.
 - **Request:** Convert the full project and learning history into one professional placement PDF with separate frontend/backend modules, detailed flowcharts, hard code in easy words, production reasoning, cliché questions, and researched interview themes.

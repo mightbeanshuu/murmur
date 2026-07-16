@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { genObject } from "./run";
+import { AllModelsFailed, genObject } from "./run";
 import type { EventBus } from "./bus";
 import type { SwarmPlan } from "./types";
 
@@ -51,7 +51,7 @@ function fallbackPlan(goal: string): SwarmPlan {
   };
 }
 
-export async function plan(goal: string, bus: EventBus): Promise<SwarmPlan> {
+export async function plan(goal: string, bus: EventBus, signal?: AbortSignal): Promise<SwarmPlan> {
   // First UI-visible event for the planning phase.
   bus.emit({ kind: "plan.start" });
 
@@ -64,12 +64,16 @@ export async function plan(goal: string, bus: EventBus): Promise<SwarmPlan> {
       schema: planSchema,
       system: SYSTEM,
       prompt: `Goal:\n${goal}`,
+      signal,
     });
     plan = { goal, ...object };
     bus.emit({ kind: "plan.token", delta: plan.summary });
-  } catch {
-    // Product tradeoff: fallback keeps the app usable during model/rate-limit
-    // failures, but the default plan is less tailored than a real planner output.
+  } catch (e) {
+    // Only degrade to the generic plan when every model in the chain was
+    // genuinely exhausted. An infrastructure error (e.g. Redis unreachable)
+    // is NOT a "the AI was flaky" situation — let it propagate so the run
+    // fails visibly instead of silently shipping a lower-quality plan.
+    if (!(e instanceof AllModelsFailed)) throw e;
     plan = fallbackPlan(goal);
     bus.emit({ kind: "plan.token", delta: plan.summary });
   }
