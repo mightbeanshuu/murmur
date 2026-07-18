@@ -5,7 +5,7 @@
 <p align="center"><strong>Turn one complex goal into a live, durable, validated agent swarm.</strong></p>
 <p align="center">Plan · Delegate · Execute · Validate · Synthesize</p>
 
-Murmur is a production-oriented orchestration workspace and an inspectable engineering portfolio project. A planner creates a task DAG, workers execute ready tasks in parallel, a validator can request one revision, and a synthesizer produces the final answer while React Flow renders every event.
+Murmur is a production-oriented orchestration workspace and an inspectable engineering portfolio project. A planner creates a task DAG, workers execute ready tasks in parallel, mode-aware validation can request focused revisions, and a synthesizer produces the final answer while React Flow renders every event.
 
 The system pairs a focused product experience with production-grade identity, billing, durable workflows, streaming state, distributed infrastructure, and observability.
 
@@ -13,22 +13,27 @@ The system pairs a focused product experience with production-grade identity, bi
 
 - Better Auth email/password sessions backed by PostgreSQL; every run is owned by a user.
 - Stripe Checkout, signed webhooks, Customer Portal, and PostgreSQL entitlement projection.
-- Free plan: 10 runs/hour. Pro plan: 100 runs/hour. Limits are Redis-backed and enforced by user ID.
+- Low, Auto, and Max modes control DAG size, validation depth, and repeated-context budgets.
+- Free plan: 3 runs/hour, with at most 1 Max run/hour. Pro plan: 100 runs/hour. Limits are atomically enforced in Redis by user ID.
 - Temporal moves long-running orchestration out of the HTTP process.
 - Redis stores run state, replayable events, and distributed rate limits.
 - Kafka receives versioned swarm events; an isolated Go consumer exports Prometheus metrics.
 - SSE streams live events to a Zustand store and React Flow graph.
 - Zod validates the planner and validator's structured LLM outputs.
+- Cloudinary stores attached images as authenticated assets before a vision model derives instruction-resistant text context.
 
 ## Request path
 
 ```text
 Browser
-  │ authenticated POST /api/swarm { goal }
+  │ authenticated POST /api/swarm { goal, mode, attachments }
   ▼
 Next.js route adapter
-  ├─ session + input + infrastructure checks
+  ├─ session + origin + bounded input + infrastructure checks
   ├─ PostgreSQL plan lookup → Redis user quota
+  ├─ text file ─────────────────────────────┐
+  ├─ public GitHub repo → fixed GitHub API ─┤→ untrusted reference context
+  ├─ image → authenticated Cloudinary asset ┘→ vision-derived text
   └─ starts Temporal workflow
           │
           ▼
@@ -44,6 +49,41 @@ Redis event stream ──SSE──▶ Zustand ──▶ React Flow
 
 The planner, worker, validator, and synthesizer are code roles, not separate servers. TypeScript controls their order and data flow; the LLM supplies language reasoning.
 
+## Execution modes
+
+| Mode | DAG size | Revision budget | Repeated-context policy | Best fit |
+| --- | ---: | ---: | --- | --- |
+| Low | 1–2 tasks | 0 revisions | smallest budgets | fast, concise work |
+| Auto | 2–4 tasks | up to 1 revision | balanced budgets | normal adaptive use |
+| Max | 4–6 tasks | up to 2 revisions | largest bounded context | deep, multi-angle work |
+
+Max is deliberately more expensive and slower, but it is not unbounded. Every mode has deterministic caps on material that gets repeated between model calls.
+
+## Token-efficiency design
+
+The orchestration layer reduces repeated prompt material before it reaches the provider:
+
+- upstream blackboard outputs, validator inputs, revision feedback, and the synthesis corpus each have a mode-specific character budget;
+- labeled sections share a budget fairly, so one oversized worker cannot crowd out every other specialist;
+- compaction preserves section labels plus the opening and conclusion, with an explicit truncation marker;
+- the original goal, task title, and task brief stay outside the repeated-context cuts;
+- attachment data is prepared once for planning instead of copying raw files or images into every worker prompt.
+
+| Mode | Upstream handoff | Revision feedback | Worker output sent to validation | Synthesis corpus |
+| --- | ---: | ---: | ---: | ---: |
+| Low | 4,000 chars | 1,000 chars | 8,000 chars | 12,000 chars |
+| Auto | 8,000 chars | 2,000 chars | 12,000 chars | 24,000 chars |
+| Max | 16,000 chars | 4,000 chars | 24,000 chars | 48,000 chars |
+
+The live token meter and run statistics use `ceil(characters / 4)`. That is a fast UI estimate, not provider-reported usage, an exact tokenizer result, or a promise of a fixed percentage saving. The practical benefit is measurable bounded prompt growth as agent output and DAG size increase.
+
+## Attachment security boundary
+
+- Text files are type-checked and size-bounded before becoming untrusted planner context.
+- GitHub attachments accept only exact public `https://github.com/owner/repository` URLs. Murmur constructs the `api.github.com` request itself, which prevents user-controlled host fetching.
+- Image attachments are validated, stored with Cloudinary's `authenticated` delivery type, and described by a vision model that is told to treat visible instructions as data.
+- Raw base64 image data is not written to Murmur's Redis run state, Kafka events, or Temporal input. Only the derived text description enters orchestration; the original image remains in the authenticated Cloudinary asset store.
+
 ## Clean architecture boundaries
 
 ```text
@@ -51,6 +91,7 @@ src/app/                    HTTP/pages: Next.js adapters and UI composition
 src/components/             browser-facing components
 src/lib/auth.ts             identity and shared authentication policy
 src/lib/billing/            plans, Stripe gateway, entitlement repository
+src/lib/media/              authenticated Cloudinary image storage adapter
 src/lib/swarm/              orchestration domain + application services
 src/lib/temporal/           durable-workflow client adapter
 src/temporal/               workflow/worker process boundary
@@ -67,7 +108,8 @@ Requirements: Node.js 20+, pnpm 11, Docker, and an OpenRouter API key.
 ```bash
 pnpm install
 cp .env.example .env.local
-# Fill OPENROUTER_API_KEY, BETTER_AUTH_SECRET, and optional Stripe values.
+# Fill OPENROUTER_API_KEY and BETTER_AUTH_SECRET.
+# Image attachments also need the three CLOUDINARY_* values; Stripe is optional.
 
 pnpm infra:up
 pnpm db:migrate
@@ -155,7 +197,8 @@ Vercel can host the Next.js web adapter, but it cannot host the continuously pol
 - managed PostgreSQL, Redis, Kafka, and Temporal Cloud/self-hosted Temporal;
 - one container service for the Temporal Worker;
 - one small container service for Go telemetry;
-- production auth, OpenRouter, Stripe, and infrastructure environment variables.
+- production auth, OpenRouter, Stripe, and infrastructure environment variables;
+- Cloudinary credentials when image attachments are enabled.
 
 Do not use Compose hostnames or `localhost` from Vercel. Use TLS-enabled managed endpoints and run `pnpm db:migrate` as a release step. See [docs/architecture.md](docs/architecture.md) and [docs/deployment.md](docs/deployment.md).
 

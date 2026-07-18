@@ -6,10 +6,12 @@ import { validate } from "./validator";
 import { runText } from "./run";
 import type { SwarmMode, SwarmPlan, SwarmTask } from "./types";
 import { executionPolicy } from "./executionMode";
-
-// Fast rough estimate for demo stats. Production should use provider-reported
-// token usage because character/4 is only an approximation.
-const estTokens = (s: string) => Math.round(s.length / 4);
+import {
+  approximateTokens,
+  boundContext,
+  boundContextSections,
+  contextBudgetFor,
+} from "./tokenBudget";
 
 interface Done {
   task: SwarmTask;
@@ -35,9 +37,10 @@ export async function runSwarm(
   mode: SwarmMode = "auto",
 ) {
   const policy = executionPolicy(mode);
+  const contextBudget = contextBudgetFor(mode);
   const t0 = Date.now();
   let tokensOut = 0;
-  let tokensIn = estTokens(goal);
+  let tokensIn = approximateTokens(goal) + approximateTokens(attachmentContext ?? "");
 
   bus.emit({ kind: "run.start", goal, at: t0 });
 
@@ -50,7 +53,7 @@ export async function runSwarm(
     await bus.close("failed");
     return;
   }
-  tokensIn += estTokens(plannedPlan.summary);
+  tokensOut += approximateTokens(JSON.stringify(plannedPlan));
 
   // completed is the shared blackboard: once a task finishes, its output is
   // stored here so downstream tasks can consume it as context.
@@ -100,19 +103,30 @@ export async function runSwarm(
           bus.emit({ kind: "message", from: d.agentId, to: agentId, label: "context" });
         }
         const depContext = deps.map((d) => ({ title: d.task.title, output: d.output }));
+        const boundedDependencies = boundContextSections(
+          depContext.map((dependency) => ({
+            heading: `### ${dependency.title}`,
+            body: dependency.output,
+          })),
+          contextBudget.dependencyChars,
+        );
 
-        tokensIn += estTokens(task.brief) + depContext.reduce((n, d) => n + estTokens(d.output), 0);
+        tokensIn += approximateTokens(task.brief) + approximateTokens(boundedDependencies);
 
         try {
           let output = await runWorker(agentId, task, depContext, bus, undefined, signal, mode);
-          tokensOut += estTokens(output);
+          tokensOut += approximateTokens(output);
 
           // Validation depth is part of the selected execution policy: low
           // performs one gate, auto can revise once, and max can revise twice.
           for (let attempt = 0; attempt <= policy.maxRevisions; attempt++) {
             bus.emit({ kind: "agent.status", id: agentId, status: "validating" });
             bus.emit({ kind: "message", from: agentId, to: "validator", label: "review" });
+            tokensIn +=
+              approximateTokens(task.brief) +
+              approximateTokens(boundContext(output, contextBudget.validationChars));
             const verdict = await validate(task, output, signal, mode);
+            tokensOut += approximateTokens(JSON.stringify(verdict));
             bus.emit({
               kind: "validate.result",
               id: agentId,
@@ -126,8 +140,12 @@ export async function runSwarm(
             // Feedback-based self-correction: the same worker reruns with the
             // validator's concrete feedback appended to its prompt.
             bus.emit({ kind: "message", from: "validator", to: agentId, label: "revise" });
+            tokensIn +=
+              approximateTokens(task.brief) +
+              approximateTokens(boundedDependencies) +
+              approximateTokens(boundContext(verdict.feedback, contextBudget.revisionChars));
             output = await runWorker(agentId, task, depContext, bus, verdict.feedback, signal, mode);
-            tokensOut += estTokens(output);
+            tokensOut += approximateTokens(output);
           }
 
           bus.emit({ kind: "agent.status", id: agentId, status: "done" });
@@ -167,14 +185,20 @@ export async function runSwarm(
   }
   bus.emit({ kind: "agent.status", id: synthId, status: "streaming" });
 
-  const corpus = [...completed.values()]
-    .map((d) => `## ${d.task.title}\n${d.output}`)
-    .join("\n\n");
+  const corpus = boundContextSections(
+    [...completed.values()].map((done) => ({
+      heading: `## ${done.task.title}`,
+      body: done.output,
+    })),
+    contextBudget.synthesisChars,
+  );
 
   let final = "";
   try {
-    // The synthesizer receives the full worker corpus. This is simple and high
-    // quality for small DAGs, but it is token-expensive as task count/output grows.
+    tokensIn +=
+      approximateTokens(goal) +
+      approximateTokens(plannedPlan.synthesisBrief) +
+      approximateTokens(corpus);
     const res = await runText("synthesizer", {
       system: [
         "You are the Synthesizer agent. Fuse the swarm's worker outputs into one cohesive, " +
@@ -192,7 +216,7 @@ export async function runSwarm(
       signal,
     });
     final = res.text;
-    tokensOut += estTokens(final);
+    tokensOut += approximateTokens(final);
     bus.emit({ kind: "agent.status", id: synthId, status: "done" });
   } catch (e) {
     console.error("Synthesizer failed", e);

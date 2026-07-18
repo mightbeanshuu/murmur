@@ -2,6 +2,7 @@ import { runText } from "./run";
 import type { EventBus } from "./bus";
 import type { SwarmMode, SwarmTask } from "./types";
 import { executionPolicy } from "./executionMode";
+import { boundContext, boundContextSections, contextBudgetFor } from "./tokenBudget";
 
 const BREVITY = " Be concise and high-signal: ~250-350 words. No preamble or filler.";
 
@@ -41,13 +42,23 @@ export async function runWorker(
 ): Promise<string> {
   bus.emit({ kind: "agent.status", id: agentId, status: feedback ? "retrying" : "thinking" });
 
+  const budget = contextBudgetFor(mode);
+
   // Shared-blackboard prompt injection: downstream workers receive dependency
   // outputs so they can build on prior work instead of starting cold.
   const blackboard = deps.length
     ? "\n\n## Upstream results you must build on:\n" +
-      deps.map((d) => `### ${d.title}\n${d.output}`).join("\n\n")
+      boundContextSections(
+        deps.map((dependency) => ({
+          heading: `### ${dependency.title}`,
+          body: dependency.output,
+        })),
+        budget.dependencyChars,
+      )
     : "";
-  const revision = feedback ? `\n\n## Validator feedback to fix on this revision:\n${feedback}` : "";
+  const revision = feedback
+    ? `\n\n## Validator feedback to fix on this revision:\n${boundContext(feedback, budget.revisionChars)}`
+    : "";
 
   let started = false;
   const { text } = await runText("worker", {

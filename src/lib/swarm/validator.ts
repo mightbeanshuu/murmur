@@ -2,6 +2,7 @@ import { z } from "zod";
 import { AllModelsFailed, genObject } from "./run";
 import type { SwarmMode, SwarmTask } from "./types";
 import { executionPolicy } from "./executionMode";
+import { boundContext, contextBudgetFor } from "./tokenBudget";
 
 // Structured verdict schema: the validator must return a score, boolean
 // approval, and actionable feedback instead of free-form text.
@@ -31,13 +32,14 @@ export async function validate(
   mode: SwarmMode = "auto",
 ): Promise<Verdict> {
   const policy = executionPolicy(mode);
+  const outputContext = boundContext(output, contextBudgetFor(mode).validationChars);
   try {
     // The validator judges the worker output against the original task brief,
     // not against the final user goal. This keeps validation scoped and concrete.
     const { object } = await genObject("validator", {
       schema,
       system: [SYSTEM, policy.validatorDirective].filter(Boolean).join("\n\n"),
-      prompt: `Brief:\nTask "${task.title}": ${task.brief}\n\nWorker output:\n${output}`,
+      prompt: `Brief:\nTask "${task.title}": ${task.brief}\n\nWorker output:\n${outputContext}`,
       signal,
     });
     return {
