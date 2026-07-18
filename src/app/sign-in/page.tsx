@@ -1,10 +1,10 @@
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { AuthForm } from "@/components/AuthForm";
+import { AuthSwarmGraph } from "@/components/AuthSwarmGraph";
 import { auth } from "@/lib/auth";
 import { MurmurBrand } from "@/components/ui/Brand";
 import {
-  AgentIcon,
   ArrowUpRightIcon,
   CheckIcon,
   GitHubIcon,
@@ -14,6 +14,13 @@ import {
 export default async function SignInPage() {
   const session = await auth.api.getSession({ headers: await headers() });
   if (session) redirect("/");
+  const mcpUrl = new URL("/api/mcp", process.env.APP_URL ?? "http://localhost:3000").toString();
+  const codexConfig = `[mcp_servers.murmur]\nurl = "${mcpUrl}"\nbearer_token_env_var = "MURMUR_MCP_TOKEN"`;
+  const claudeConfig = JSON.stringify({
+    type: "http",
+    url: mcpUrl,
+    headers: { Authorization: "Bearer ${MURMUR_MCP_TOKEN}" },
+  });
 
   return (
     <main className="murmur-auth-page">
@@ -44,32 +51,7 @@ export default async function SignInPage() {
           </p>
         </div>
 
-        <div className="murmur-auth-graph" aria-label="Example agent swarm flow">
-          <div className="murmur-auth-node is-planner">
-            <AgentIcon type="planner" size={17} />
-            <span>Planner</span>
-            <small>Task graph ready</small>
-          </div>
-          <span className="murmur-auth-edge is-one" />
-          <span className="murmur-auth-edge is-two" />
-          <div className="murmur-auth-node is-research">
-            <AgentIcon type="researcher" size={17} />
-            <span>Research</span>
-            <small>Running</small>
-          </div>
-          <div className="murmur-auth-node is-analysis">
-            <AgentIcon type="analyst" size={17} />
-            <span>Analysis</span>
-            <small>Running</small>
-          </div>
-          <span className="murmur-auth-edge is-three" />
-          <span className="murmur-auth-edge is-four" />
-          <div className="murmur-auth-node is-synthesis">
-            <AgentIcon type="synthesizer" size={17} />
-            <span>Synthesis</span>
-            <small>Waiting on 2 agents</small>
-          </div>
-        </div>
+        <AuthSwarmGraph />
 
         <ul className="murmur-auth-proof">
           <li><CheckIcon size={15} /> Temporal durability</li>
@@ -81,6 +63,27 @@ export default async function SignInPage() {
       <section className="murmur-auth-entry" aria-label="Murmur account access">
         <AuthForm />
         <p className="murmur-auth-footnote">Secure sessions powered by Better Auth. Payments stay on Stripe.</p>
+        <aside className="murmur-auth-terminal" aria-label="Connect Codex or Claude Code through MCP">
+          <header>
+            <span className="murmur-terminal-lights" aria-hidden="true"><i /><i /><i /></span>
+            <strong>Murmur MCP</strong>
+            <span>Sign in to create token</span>
+          </header>
+          <div className="murmur-terminal-body">
+            <div>
+              <b>Token</b>
+              <code>export MURMUR_MCP_TOKEN=&quot;&lt;token from Connect MCP&gt;&quot;</code>
+            </div>
+            <div>
+              <b>Codex</b>
+              <code>{codexConfig}</code>
+            </div>
+            <div>
+              <b>Claude Code</b>
+              <code>claude mcp add-json --scope user murmur &apos;{claudeConfig}&apos;</code>
+            </div>
+          </div>
+        </aside>
       </section>
     </main>
   );

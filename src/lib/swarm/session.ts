@@ -38,7 +38,12 @@ const PERSIST_EVENT = `
     return 0
   end
 
-  for i = 6, #ARGV, 2 do
+  if ARGV[6] ~= "" then
+    redis.call("ZADD", KEYS[3], ARGV[6], ARGV[7])
+    redis.call("EXPIRE", KEYS[3], ARGV[2])
+  end
+
+  for i = 8, #ARGV, 2 do
     redis.call("HSET", KEYS[1], ARGV[i], ARGV[i + 1])
   end
   redis.call("EXPIRE", KEYS[1], ARGV[2])
@@ -60,13 +65,19 @@ function eventStreamKey(runId: string) {
   return `murmur:run:${runId}:events`;
 }
 
+function ownerRunsKey(ownerId: string) {
+  return `murmur:owner:${ownerId}:runs`;
+}
+
 /** Stores an append-only event stream and the current run projection in Redis. */
 export async function persistRunEvent(envelope: SwarmEventEnvelope) {
   const redis = await getRedis();
 
   const session = sessionKey(envelope.runId);
   const eventStream = eventStreamKey(envelope.runId);
+  const ownerRuns = ownerRunsKey(envelope.ownerId);
   const now = String(envelope.occurredAt);
+  const ownerIndexScore = envelope.event.kind === "run.start" ? String(envelope.event.at) : "";
   const fields: string[] = [
     "runId",
     envelope.runId,
@@ -92,14 +103,17 @@ export async function persistRunEvent(envelope: SwarmEventEnvelope) {
 
   const persisted = await redis.eval(
     PERSIST_EVENT,
-    2,
+    3,
     session,
     eventStream,
+    ownerRuns,
     envelope.sequence,
     SESSION_TTL_SECONDS,
     EVENT_STREAM_MAX_LENGTH,
     `${envelope.sequence}-0`,
     JSON.stringify(envelope),
+    ownerIndexScore,
+    envelope.runId,
     ...fields,
   );
   return persisted === 1;
@@ -129,6 +143,8 @@ export async function createRunSession(runId: string, ownerId: string, goal: str
       now,
     )
     .expire(sessionKey(runId), SESSION_TTL_SECONDS)
+    .zadd(ownerRunsKey(ownerId), now, runId)
+    .expire(ownerRunsKey(ownerId), SESSION_TTL_SECONDS)
     .exec();
 }
 
@@ -160,6 +176,17 @@ export async function getRunSession(runId: string): Promise<RunSession | null> {
     final: data.final,
     lastError: data.lastError,
   };
+}
+
+/** Lists the authenticated owner's most recent server-retained runs. */
+export async function listRunSessions(ownerId: string, limit = 20): Promise<RunSession[]> {
+  const redis = await getRedis();
+  const safeLimit = Math.min(Math.max(Math.floor(limit), 1), 50);
+  const runIds = await redis.zrevrange(ownerRunsKey(ownerId), 0, safeLimit * 2 - 1);
+  const sessions = await Promise.all(runIds.map((runId) => getRunSession(runId)));
+  return sessions
+    .filter((session): session is RunSession => session?.ownerId === ownerId)
+    .slice(0, safeLimit);
 }
 
 export async function getRunEvents(runId: string, count = 1_000): Promise<SwarmEventEnvelope[]> {

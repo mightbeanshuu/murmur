@@ -74,18 +74,47 @@
 
 .murmur-auth-graph {
   position: relative;
-  width: min(100%, 700px);
-  height: 224px;
+  width: min(100%, 640px);
+  height: 232px;
   flex: 0 0 auto;
   margin-top: clamp(30px, 4.5vh, 46px);
+}
+
+.murmur-auth-edges {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.murmur-auth-edge-line,
+.murmur-auth-edge-path {
+  fill: none;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.murmur-auth-edge-line {
+  stroke: var(--line-strong);
+  stroke-width: 1.25;
+}
+
+.murmur-auth-edge-path {
+  opacity: 0.68;
+  stroke: var(--cyan);
+  stroke-width: 2.5;
+  stroke-dasharray: 2 24;
 }
 
 .murmur-auth-node {
   position: absolute;
   z-index: 2;
   display: grid;
-  width: 150px;
-  min-height: 70px;
+  width: 168px;
+  min-height: 64px;
   grid-template-columns: 24px 1fr;
   align-items: center;
   border: 1px solid var(--line);
@@ -102,44 +131,28 @@
 }
 
 .murmur-auth-node small {
+  display: flex;
   grid-column: 2;
+  align-items: center;
+  gap: 6px;
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 9px;
 }
 
-.murmur-auth-node.is-planner { top: 0; left: calc(50% - 75px); }
-.murmur-auth-node.is-research { top: 92px; left: 8%; color: var(--cyan); }
-.murmur-auth-node.is-analysis { top: 92px; right: 8%; color: var(--success); }
-.murmur-auth-node.is-synthesis { right: calc(50% - 75px); bottom: 0; color: var(--accent); }
-
-.murmur-auth-edge {
-  position: absolute;
-  z-index: 1;
-  height: 1px;
-  background: var(--line-strong);
-  transform-origin: left center;
-}
-
-.murmur-auth-edge::after {
-  position: absolute;
-  top: -2px;
-  left: 0;
+.murmur-auth-status {
   width: 5px;
   height: 5px;
+  flex: 0 0 auto;
   border-radius: 50%;
-  background: var(--cyan);
-  content: "";
-  animation: murmur-signal 2.8s linear infinite;
+  background: var(--subtle);
 }
 
-.murmur-auth-edge.is-one { top: 68px; left: 47%; width: 32%; transform: rotate(155deg); }
-.murmur-auth-edge.is-two { top: 68px; left: 53%; width: 32%; transform: rotate(25deg); }
-.murmur-auth-edge.is-three { top: 153px; left: 26%; width: 28%; transform: rotate(24deg); }
-.murmur-auth-edge.is-four { top: 153px; left: 74%; width: 28%; transform: rotate(156deg); }
-.murmur-auth-edge.is-two::after { animation-delay: -0.7s; }
-.murmur-auth-edge.is-three::after { animation-delay: -1.4s; }
-.murmur-auth-edge.is-four::after { animation-delay: -2.1s; }
+.murmur-auth-status.is-live { background: var(--cyan); opacity: 0.55; }
+.murmur-auth-node.is-planner { top: 0; left: 50%; transform: translateX(-50%); }
+.murmur-auth-node.is-research { top: 88px; left: 0; color: var(--cyan); }
+.murmur-auth-node.is-analysis { top: 88px; right: 0; color: var(--success); }
+.murmur-auth-node.is-synthesis { top: 168px; left: 50%; color: var(--accent); transform: translateX(-50%); }
 
 .murmur-auth-proof {
   display: flex;
@@ -316,10 +329,48 @@
   text-align: center;
 }
 
-@keyframes murmur-signal {
-  from { transform: translateX(0); opacity: 0; }
-  15%, 80% { opacity: 1; }
-  to { transform: translateX(var(--signal-distance, 170px)); opacity: 0; }
+.murmur-auth-terminal {
+  position: relative;
+  width: min(100%, 440px);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgb(6 6 11 / 82%);
+  margin-top: 18px;
+  overflow: hidden;
+}
+
+.murmur-auth-terminal > header {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 9px;
+  border-bottom: 1px solid var(--line);
+  padding: 0 11px;
+}
+
+.murmur-auth-terminal > header strong { color: var(--text); font-size: 9px; }
+.murmur-auth-terminal > header > span:last-child { color: var(--subtle); font-size: 8px; margin-left: auto; }
+.murmur-terminal-lights { display: flex; gap: 4px; }
+.murmur-terminal-lights i { width: 5px; height: 5px; border-radius: 50%; background: var(--subtle); }
+.murmur-terminal-lights i:nth-child(1) { background: var(--danger); }
+.murmur-terminal-lights i:nth-child(2) { background: var(--warning); }
+.murmur-terminal-lights i:nth-child(3) { background: var(--success); }
+
+.murmur-terminal-body {
+  display: grid;
+  gap: 8px;
+  padding: 10px 11px 11px;
+}
+
+.murmur-terminal-body > div { display: grid; grid-template-columns: 68px minmax(0, 1fr); align-items: baseline; gap: 8px; }
+.murmur-terminal-body b { color: var(--cyan); font-size: 8px; }
+.murmur-terminal-body code {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 @media (max-width: 980px) {
@@ -334,13 +385,14 @@
   .murmur-auth-story { margin-top: 32px; }
   .murmur-auth-story h1 { margin-block: 16px 13px; font-size: clamp(2.8rem, 4.7vw, 4.15rem); }
   .murmur-auth-story p { font-size: 13px; line-height: 1.6; }
-  .murmur-auth-graph { height: 196px; margin-top: 24px; }
-  .murmur-auth-node { min-height: 62px; padding: 9px 11px; }
+  .murmur-auth-graph { height: 176px; margin-top: 20px; }
+  .murmur-auth-node { min-height: 54px; padding: 7px 10px; }
   .murmur-auth-node.is-research,
-  .murmur-auth-node.is-analysis { top: 68px; }
-  .murmur-auth-edge.is-three,
-  .murmur-auth-edge.is-four { top: 128px; }
-  .murmur-auth-proof { margin-top: 20px; }
+  .murmur-auth-node.is-analysis { top: 67px; }
+  .murmur-auth-node.is-synthesis { top: 122px; }
+  .murmur-auth-proof { margin-top: 16px; }
+  .murmur-auth-entry { padding-block: 22px; }
+  .murmur-auth-terminal { margin-top: 12px; }
 }
 
 @media (max-width: 620px) {

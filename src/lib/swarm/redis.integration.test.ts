@@ -5,7 +5,7 @@ process.env.REDIS_URL ??= "redis://localhost:6379";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { getRedis, disconnectRedis } from "./redis";
 import { enforceRateLimit, rateLimitKey, RateLimitError } from "./rateLimit";
-import { persistRunEvent, getRunSession, getRunEvents } from "./session";
+import { persistRunEvent, getRunSession, getRunEvents, listRunSessions } from "./session";
 import type { SwarmEventEnvelope } from "./session";
 
 // Unique-ish prefix per test run so parallel/rerun test runs never collide keys.
@@ -78,6 +78,18 @@ describe("persistRunEvent against real Redis", () => {
     expect(session?.ownerId).toBe("test-user");
     expect(session?.goal).toBe("integration test goal");
     expect(session?.eventCount).toBe(1);
+  });
+
+  it("indexes runs by owner without exposing another owner's runs", async () => {
+    const runId = testId();
+    await persistRunEvent(envelope(runId, 1));
+
+    await expect(listRunSessions("test-user")).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ runId, ownerId: "test-user" })]),
+    );
+    await expect(listRunSessions("another-user")).resolves.not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ runId })]),
+    );
   });
 
   it("appends events to the replayable stream in order", async () => {

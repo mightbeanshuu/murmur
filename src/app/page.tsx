@@ -5,8 +5,10 @@ import { RecentRuns } from "@/components/RecentRuns";
 import { UserMenu } from "@/components/UserMenu";
 import { SystemStatus } from "@/components/SystemStatus";
 import { BillingControls } from "@/components/BillingControls";
+import { McpConnection } from "@/components/McpConnection";
 import { auth } from "@/lib/auth";
 import { getUserPlan } from "@/lib/billing/repository";
+import { getMcpTokenStatus } from "@/lib/mcp/service";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { MurmurBrand } from "@/components/ui/Brand";
@@ -19,7 +21,11 @@ export default async function Home({
 }) {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) redirect("/sign-in");
-  const [plan, query] = await Promise.all([getUserPlan(session.user.id), searchParams]);
+  const [plan, query, mcpStatus] = await Promise.all([
+    getUserPlan(session.user.id),
+    searchParams,
+    getMcpTokenStatus(session.user.id),
+  ]);
 
   return (
     <main className="murmur-app">
@@ -28,6 +34,12 @@ export default async function Home({
         <div className="murmur-header-actions">
           <SystemStatus />
           <BillingControls plan={plan} />
+          <McpConnection
+            initialStatus={{
+              configured: mcpStatus.configured,
+              lastUsedAt: mcpStatus.lastUsedAt?.toISOString() ?? null,
+            }}
+          />
           <a
             aria-label="View Murmur source on GitHub"
             className="murmur-icon-link"
