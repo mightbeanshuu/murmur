@@ -1,6 +1,7 @@
 import { generateObject, streamObject, streamText } from "ai";
 import type { z } from "zod";
 import { chainFor, model, type Role } from "./models";
+import { withAgentBehaviorPolicy } from "./promptPolicy";
 import { enforceRateLimit, MODEL_RATE_LIMIT, rateLimitKey, RateLimitError } from "./rateLimit";
 
 // Per-attempt wall-clock budget. A model that accepts the request but never returns
@@ -66,7 +67,7 @@ export async function runText(
     try {
       const res = streamText({
         model: model(id),
-        system: opts.system,
+        system: withAgentBehaviorPolicy(opts.system),
         prompt: opts.prompt,
         maxRetries: 0,
         abortSignal: attemptSignal(opts.signal),
@@ -105,7 +106,7 @@ export async function runObject<T>(
       const res = streamObject({
         model: model(id),
         schema: opts.schema,
-        system: opts.system,
+        system: withAgentBehaviorPolicy(opts.system),
         prompt: opts.prompt,
         maxRetries: 0,
         abortSignal: attemptSignal(opts.signal),
@@ -135,7 +136,7 @@ export async function genObject<T>(
       const { object } = await generateObject({
         model: model(id),
         schema: opts.schema,
-        system: opts.system,
+        system: withAgentBehaviorPolicy(opts.system),
         prompt: opts.prompt,
         maxRetries: 0,
         abortSignal: attemptSignal(opts.signal),
