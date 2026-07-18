@@ -1,9 +1,10 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import { useSwarm } from "@/lib/store";
 import { AGENT_META } from "@/lib/swarm/types";
 import { Markdown } from "./Markdown";
-import { AgentIcon, SparklesIcon, WarningIcon } from "./ui/Icons";
+import { AgentIcon, CloseIcon, MaximizeIcon, SparklesIcon, WarningIcon } from "./ui/Icons";
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
@@ -17,6 +18,65 @@ function Stat({ label, value }: { label: string; value: string }) {
 export function SidePanel() {
   const { agents, selected, planSummary, planThinking, final, stats, runStatus, error } = useSwarm();
   const agent = selected ? agents[selected] : null;
+  const readerTriggerRef = useRef<HTMLButtonElement>(null);
+  const readerDialogRef = useRef<HTMLDialogElement>(null);
+  const readerCloseRef = useRef<HTMLButtonElement>(null);
+  const copyResetRef = useRef<number | null>(null);
+  const [readerOpen, setReaderOpen] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "error">("idle");
+
+  function openReader() {
+    setCopyStatus("idle");
+    setReaderOpen(true);
+  }
+
+  function closeReader() {
+    readerDialogRef.current?.close();
+    setReaderOpen(false);
+    window.setTimeout(() => readerTriggerRef.current?.focus(), 0);
+  }
+
+  async function copyFinal() {
+    if (!final) return;
+
+    try {
+      await navigator.clipboard.writeText(final);
+      setCopyStatus("copied");
+      if (copyResetRef.current != null) window.clearTimeout(copyResetRef.current);
+      copyResetRef.current = window.setTimeout(() => setCopyStatus("idle"), 1800);
+    } catch {
+      setCopyStatus("error");
+    }
+  }
+
+  useEffect(() => {
+    const dialog = readerDialogRef.current;
+    if (!readerOpen || !final || !dialog || dialog.open) return;
+
+    dialog.showModal();
+    window.setTimeout(() => readerCloseRef.current?.focus(), 0);
+  }, [final, readerOpen]);
+
+  useEffect(() => {
+    if (!readerOpen || !final) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [final, readerOpen]);
+
+  useEffect(() => useSwarm.subscribe((state, previousState) => {
+    if (previousState.final && !state.final) {
+      readerDialogRef.current?.close();
+      setReaderOpen(false);
+    }
+  }), []);
+
+  useEffect(() => () => {
+    if (copyResetRef.current != null) window.clearTimeout(copyResetRef.current);
+  }, []);
 
   return (
     <aside className="murmur-side">
@@ -47,11 +107,25 @@ export function SidePanel() {
         </>
       ) : (
         <>
-          <div className="murmur-side-head">
-            <span className="murmur-side-label">
-              <SparklesIcon size={15} />
-              {runStatus === "running" ? "Swarm in progress" : runStatus === "done" ? "Final deliverable" : "Run briefing"}
-            </span>
+          <div className={`murmur-side-head${final ? " murmur-deliverable-head" : ""}`}>
+            <div className="murmur-deliverable-heading-row">
+              <span className="murmur-side-label">
+                <SparklesIcon size={15} />
+                {runStatus === "running" ? "Swarm in progress" : runStatus === "done" ? "Final deliverable" : "Run briefing"}
+              </span>
+              {final ? (
+                <button
+                  ref={readerTriggerRef}
+                  className="murmur-deliverable-open"
+                  type="button"
+                  onClick={openReader}
+                  aria-haspopup="dialog"
+                >
+                  <MaximizeIcon size={14} />
+                  Read full
+                </button>
+              ) : null}
+            </div>
             {planSummary && <h3>{planSummary}</h3>}
           </div>
 
@@ -63,7 +137,7 @@ export function SidePanel() {
             </div>
           )}
 
-          <div className="murmur-scroll">
+          <div className={`murmur-scroll${final ? " murmur-deliverable-preview" : ""}`}>
             {final ? (
               <Markdown>{final}</Markdown>
             ) : runStatus === "running" ? (
@@ -82,6 +156,65 @@ export function SidePanel() {
               </div>
             )}
           </div>
+
+          {final ? (
+            <dialog
+              ref={readerDialogRef}
+              className="murmur-deliverable-dialog"
+              aria-labelledby="murmur-deliverable-title"
+              aria-describedby="murmur-deliverable-description"
+              onCancel={(event) => {
+                event.preventDefault();
+                closeReader();
+              }}
+              onClick={(event) => {
+                if (event.target === event.currentTarget) closeReader();
+              }}
+              onClose={() => setReaderOpen(false)}
+            >
+              <section className="murmur-deliverable-reader">
+                <header className="murmur-deliverable-reader-head">
+                  <div className="murmur-deliverable-reader-title">
+                    <span><SparklesIcon size={17} /></span>
+                    <div>
+                      <h2 id="murmur-deliverable-title">Final deliverable</h2>
+                      <p id="murmur-deliverable-description">
+                        Synthesized result from the completed swarm run.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="murmur-deliverable-reader-actions">
+                    <button type="button" onClick={() => void copyFinal()}>
+                      {copyStatus === "copied" ? "Copied" : copyStatus === "error" ? "Copy failed" : "Copy Markdown"}
+                    </button>
+                    <button
+                      ref={readerCloseRef}
+                      className="murmur-deliverable-close"
+                      type="button"
+                      onClick={closeReader}
+                      aria-label="Close final deliverable reader"
+                    >
+                      <CloseIcon size={18} />
+                    </button>
+                  </div>
+                </header>
+
+                <div className="murmur-deliverable-reader-scroll">
+                  <article className="murmur-deliverable-document">
+                    <Markdown>{final}</Markdown>
+                  </article>
+                </div>
+
+                <span className="murmur-deliverable-copy-status" aria-live="polite">
+                  {copyStatus === "copied"
+                    ? "Final deliverable copied to the clipboard."
+                    : copyStatus === "error"
+                      ? "Clipboard access was blocked."
+                      : ""}
+                </span>
+              </section>
+            </dialog>
+          ) : null}
         </>
       )}
     </aside>
