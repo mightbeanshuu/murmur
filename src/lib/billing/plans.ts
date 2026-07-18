@@ -11,7 +11,17 @@ export function runAllowance(plan: BillingPlan) {
     limit:
       plan === "pro"
         ? positiveInt("MURMUR_PRO_RUNS_PER_WINDOW", 100)
-        : positiveInt("MURMUR_FREE_RUNS_PER_WINDOW", 10),
+        : positiveInt("MURMUR_FREE_RUNS_PER_WINDOW", 3),
+    windowSeconds: positiveInt("MURMUR_RUN_WINDOW_SECONDS", 3600),
+  };
+}
+
+export function maxRunAllowance(plan: BillingPlan) {
+  return {
+    limit:
+      plan === "pro"
+        ? positiveInt("MURMUR_PRO_MAX_RUNS_PER_WINDOW", 100)
+        : positiveInt("MURMUR_FREE_MAX_RUNS_PER_WINDOW", 1),
     windowSeconds: positiveInt("MURMUR_RUN_WINDOW_SECONDS", 3600),
   };
 }

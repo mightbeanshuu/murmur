@@ -2,11 +2,24 @@ import {
   assertInfrastructureReady,
   InfrastructureUnavailableError,
 } from "@/lib/swarm/infrastructure";
-import { enforceRateLimit, rateLimitKey, RateLimitError } from "@/lib/swarm/rateLimit";
+import { enforceRunRateLimit, rateLimitKey, RateLimitError } from "@/lib/swarm/rateLimit";
 import { getRequestSession } from "@/lib/auth";
 import { getUserPlan } from "@/lib/billing/repository";
-import { runAllowance } from "@/lib/billing/plans";
+import { maxRunAllowance, runAllowance } from "@/lib/billing/plans";
 import { launchSwarm } from "@/lib/swarm/launch";
+import {
+  hasTrustedOrigin,
+  readJsonBody,
+  requestErrorResponse,
+} from "@/lib/http/request";
+import {
+  buildAttachmentContext,
+  MAX_SWARM_REQUEST_BYTES,
+  parseSwarmRequest,
+  SwarmAttachmentError,
+} from "@/lib/swarm/request";
+import { ImageStorageUnavailableError, storeSwarmImage } from "@/lib/media/cloudinary";
+import { describeSwarmImage } from "@/lib/swarm/run";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -16,15 +29,20 @@ export async function POST(req: Request) {
   if (!authSession) {
     return Response.json({ error: "Authentication required." }, { status: 401 });
   }
+  if (!hasTrustedOrigin(req)) {
+    return Response.json({ error: "Origin not allowed." }, { status: 403 });
+  }
 
-  // Defensive parsing: invalid JSON becomes an empty goal so validation below
-  // returns a clean 400 instead of crashing the route.
-  const { goal } = await req.json().catch(() => ({ goal: "" }));
-  if (!goal || typeof goal !== "string" || goal.trim().length < 4) {
-    return new Response(JSON.stringify({ error: "Provide a goal (min 4 chars)." }), {
-      status: 400,
-      headers: { "content-type": "application/json" },
-    });
+  let input;
+  try {
+    input = parseSwarmRequest(await readJsonBody(req, MAX_SWARM_REQUEST_BYTES));
+  } catch (error) {
+    const response = requestErrorResponse(error);
+    if (response) return response;
+    if (error instanceof SwarmAttachmentError) {
+      return Response.json({ error: error.message }, { status: error.status });
+    }
+    return Response.json({ error: "Invalid swarm request." }, { status: 400 });
   }
   if (!process.env.OPENROUTER_API_KEY) {
     // API keys stay server-side in Next.js route handlers. Never expose this
@@ -57,9 +75,14 @@ export async function POST(req: Request) {
 
   try {
     const plan = await getUserPlan(authSession.user.id);
-    await enforceRateLimit({
-      key: rateLimitKey("runs", authSession.user.id),
-      ...runAllowance(plan),
+    const allowance = runAllowance(plan);
+    await enforceRunRateLimit({
+      totalKey: rateLimitKey("runs", authSession.user.id),
+      totalLimit: allowance.limit,
+      maxKey: rateLimitKey("runs:max", authSession.user.id),
+      maxLimit: maxRunAllowance(plan).limit,
+      isMax: input.mode === "max",
+      windowSeconds: allowance.windowSeconds,
     });
   } catch (e) {
     if (e instanceof RateLimitError) {
@@ -78,36 +101,85 @@ export async function POST(req: Request) {
   }
 
   const runId = crypto.randomUUID();
+  let attachmentContext: string | undefined;
+  try {
+    attachmentContext = await buildAttachmentContext(
+      input.attachments,
+      req.signal,
+      async (image, signal) => {
+        await storeSwarmImage({
+          dataUrl: image.dataUrl,
+          ownerId: authSession.user.id,
+          runId,
+        });
+        return describeSwarmImage({
+          name: image.name,
+          mediaType: image.mediaType,
+          dataUrl: image.dataUrl,
+          signal,
+        });
+      },
+    );
+  } catch (error) {
+    if (error instanceof SwarmAttachmentError) {
+      return Response.json({ error: error.message }, { status: error.status });
+    }
+    if (error instanceof ImageStorageUnavailableError) {
+      return Response.json({ error: "Image storage is unavailable." }, { status: 503 });
+    }
+    if (req.signal.aborted) {
+      return new Response(null, { status: 499 });
+    }
+    console.error("Unable to prepare swarm attachments", error);
+    return Response.json({ error: "Unable to prepare attachments." }, { status: 503 });
+  }
+
   const encoder = new TextEncoder();
+  const streamAbort = new AbortController();
+  const executionSignal = AbortSignal.any([req.signal, streamAbort.signal]);
   let running;
   try {
     running = await launchSwarm({
       runId,
       ownerId: authSession.user.id,
-      goal: goal.trim(),
-      signal: req.signal,
+      goal: input.goal,
+      context: attachmentContext,
+      mode: input.mode,
+      signal: executionSignal,
     });
   } catch (error) {
+    console.error(`Unable to start swarm ${runId}`, error);
     return Response.json(
-      { error: `Unable to start swarm: ${(error as Error).message}` },
+      { error: "Unable to start swarm. Please try again." },
       { status: 503, headers: { "retry-after": "5" } },
     );
   }
 
+  let cancelled = false;
   const stream = new ReadableStream({
     async start(controller) {
       try {
         for await (const event of running.events) {
+          if (cancelled) break;
           // Server-Sent Events frame format. The blank line terminates one event.
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
         }
       } catch (e) {
-        controller.enqueue(
-          encoder.encode(`data: ${JSON.stringify({ kind: "error", message: (e as Error).message })}\n\n`),
-        );
+        console.error(`Swarm event stream ${runId} failed`, e);
+        if (!cancelled) {
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ kind: "error", message: "The live event stream was interrupted." })}\n\n`,
+            ),
+          );
+        }
       } finally {
-        controller.close();
+        if (!cancelled) controller.close();
       }
+    },
+    cancel() {
+      cancelled = true;
+      streamAbort.abort();
     },
   });
 

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { AllModelsFailed, genObject } from "./run";
-import type { SwarmTask } from "./types";
+import type { SwarmMode, SwarmTask } from "./types";
+import { executionPolicy } from "./executionMode";
 
 // Structured verdict schema: the validator must return a score, boolean
 // approval, and actionable feedback instead of free-form text.
@@ -23,20 +24,26 @@ export interface Verdict {
   feedback: string;
 }
 
-export async function validate(task: SwarmTask, output: string, signal?: AbortSignal): Promise<Verdict> {
+export async function validate(
+  task: SwarmTask,
+  output: string,
+  signal?: AbortSignal,
+  mode: SwarmMode = "auto",
+): Promise<Verdict> {
+  const policy = executionPolicy(mode);
   try {
     // The validator judges the worker output against the original task brief,
     // not against the final user goal. This keeps validation scoped and concrete.
     const { object } = await genObject("validator", {
       schema,
-      system: SYSTEM,
+      system: [SYSTEM, policy.validatorDirective].filter(Boolean).join("\n\n"),
       prompt: `Brief:\nTask "${task.title}": ${task.brief}\n\nWorker output:\n${output}`,
       signal,
     });
     return {
       // Code-level guardrail: approval requires both the model's boolean and
       // a minimum score. This prevents "approved: true, score: 4" from passing.
-      approved: object.approved && object.score >= 7,
+      approved: object.approved && object.score >= policy.approvalScore,
       score: object.score,
       feedback: object.feedback,
     };
@@ -47,6 +54,10 @@ export async function validate(task: SwarmTask, output: string, signal?: AbortSi
     if (!(e instanceof AllModelsFailed)) throw e;
     // Production improvement: mark this as "unvalidated" instead of silently
     // treating it as a normal approved result.
-    return { approved: true, score: 7, feedback: "Validator unavailable; auto-approved." };
+    return {
+      approved: true,
+      score: policy.approvalScore,
+      feedback: "Validator unavailable; auto-approved.",
+    };
   }
 }

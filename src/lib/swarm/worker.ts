@@ -1,6 +1,7 @@
 import { runText } from "./run";
 import type { EventBus } from "./bus";
-import type { SwarmTask } from "./types";
+import type { SwarmMode, SwarmTask } from "./types";
+import { executionPolicy } from "./executionMode";
 
 const BREVITY = " Be concise and high-signal: ~250-350 words. No preamble or filler.";
 
@@ -36,6 +37,7 @@ export async function runWorker(
   bus: EventBus,
   feedback?: string,
   signal?: AbortSignal,
+  mode: SwarmMode = "auto",
 ): Promise<string> {
   bus.emit({ kind: "agent.status", id: agentId, status: feedback ? "retrying" : "thinking" });
 
@@ -49,7 +51,7 @@ export async function runWorker(
 
   let started = false;
   const { text } = await runText("worker", {
-    system: SYSTEM[task.type],
+    system: [SYSTEM[task.type], executionPolicy(mode).workerDirective].filter(Boolean).join("\n\n"),
     prompt: `Task: ${task.title}\n\n${task.brief}${blackboard}${revision}`,
     onDelta: (delta) => {
       if (!started) {

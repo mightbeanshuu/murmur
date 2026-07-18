@@ -1,6 +1,7 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { authenticateMcpToken } from "@/lib/mcp/service";
 import { createMurmurMcpServer } from "@/lib/mcp/server";
+import { readBodyBytes, requestErrorResponse } from "@/lib/http/request";
 
 export const runtime = "nodejs";
 
@@ -29,6 +30,23 @@ async function handleMcp(request: Request) {
   const account = await authenticateMcpToken(token);
   if (!account) return unauthorized();
 
+  let boundedRequest = request;
+  if (request.method === "POST") {
+    try {
+      const body = await readBodyBytes(request, 256 * 1024);
+      boundedRequest = new Request(request.url, {
+        method: request.method,
+        headers: request.headers,
+        body: body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer,
+        signal: request.signal,
+      });
+    } catch (error) {
+      const response = requestErrorResponse(error);
+      if (response) return response;
+      return Response.json({ error: "Invalid MCP request." }, { status: 400 });
+    }
+  }
+
   const publicUrl = new URL(process.env.APP_URL ?? request.url);
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
@@ -39,7 +57,12 @@ async function handleMcp(request: Request) {
   });
   const server = createMurmurMcpServer(account.userId);
   await server.connect(transport);
-  return transport.handleRequest(request);
+  try {
+    return await transport.handleRequest(boundedRequest);
+  } catch (error) {
+    console.error("MCP request failed", error);
+    return Response.json({ error: "MCP request failed." }, { status: 400 });
+  }
 }
 
 export const GET = handleMcp;

@@ -4,7 +4,7 @@ process.env.REDIS_URL ??= "redis://localhost:6379";
 
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { getRedis, disconnectRedis } from "./redis";
-import { enforceRateLimit, rateLimitKey, RateLimitError } from "./rateLimit";
+import { enforceRateLimit, enforceRunRateLimit, rateLimitKey, RateLimitError } from "./rateLimit";
 import { persistRunEvent, getRunSession, getRunEvents, listRunSessions } from "./session";
 import type { SwarmEventEnvelope } from "./session";
 
@@ -54,6 +54,29 @@ describe("enforceRateLimit against real Redis", () => {
     const ttlAfterSecond = await redis.ttl(key);
     // If EXPIRE ran again on the 2nd call, ttlAfterSecond would jump back near 60.
     expect(ttlAfterSecond).toBeLessThanOrEqual(ttlAfterFirst);
+  });
+});
+
+describe("enforceRunRateLimit against real Redis", () => {
+  it("enforces Max separately without consuming a rejected run", async () => {
+    const id = testId();
+    const input = {
+      totalKey: rateLimitKey("runs", id),
+      totalLimit: 3,
+      maxKey: rateLimitKey("runs:max", id),
+      maxLimit: 1,
+      windowSeconds: 60,
+    };
+
+    await expect(enforceRunRateLimit({ ...input, isMax: true })).resolves.toBeUndefined();
+    await expect(enforceRunRateLimit({ ...input, isMax: true })).rejects.toThrow(
+      "Max mode hourly limit",
+    );
+    await expect(enforceRunRateLimit({ ...input, isMax: false })).resolves.toBeUndefined();
+    await expect(enforceRunRateLimit({ ...input, isMax: false })).resolves.toBeUndefined();
+    await expect(enforceRunRateLimit({ ...input, isMax: false })).rejects.toThrow(
+      "Hourly run limit",
+    );
   });
 });
 

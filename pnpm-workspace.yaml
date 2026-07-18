@@ -10,5 +10,7 @@ onlyBuiltDependencies:
   - protobufjs
   - sharp
   - unrs-resolver
+overrides:
+  postcss: 8.5.10
 patchedDependencies:
   kafkajs@2.2.4: patches/kafkajs@2.2.4.patch

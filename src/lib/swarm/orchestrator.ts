@@ -4,9 +4,9 @@ import { nextWave } from "./dagSchedule";
 import { runWorker } from "./worker";
 import { validate } from "./validator";
 import { runText } from "./run";
-import type { SwarmPlan, SwarmTask } from "./types";
+import type { SwarmMode, SwarmPlan, SwarmTask } from "./types";
+import { executionPolicy } from "./executionMode";
 
-const MAX_RETRIES = 1;
 // Fast rough estimate for demo stats. Production should use provider-reported
 // token usage because character/4 is only an approximation.
 const estTokens = (s: string) => Math.round(s.length / 4);
@@ -20,13 +20,21 @@ interface Done {
 /**
  * Drives a full swarm run, emitting events onto the bus. Tasks whose dependencies
  * are all satisfied run concurrently; each is gated by the validator with one
- * self-correcting retry. A synthesizer fuses the outputs into the final answer.
+ * mode-aware validation and self-correction. A synthesizer fuses the outputs
+ * into the final answer.
  *
  * `signal` represents the execution owner's cancellation request. In direct
  * mode that owner is the HTTP request; in Temporal mode it is the Activity,
  * which intentionally continues if a browser merely disconnects.
  */
-export async function runSwarm(goal: string, bus: EventBus, signal?: AbortSignal) {
+export async function runSwarm(
+  goal: string,
+  bus: EventBus,
+  signal?: AbortSignal,
+  attachmentContext?: string,
+  mode: SwarmMode = "auto",
+) {
+  const policy = executionPolicy(mode);
   const t0 = Date.now();
   let tokensOut = 0;
   let tokensIn = estTokens(goal);
@@ -35,9 +43,10 @@ export async function runSwarm(goal: string, bus: EventBus, signal?: AbortSignal
 
   let plannedPlan: SwarmPlan;
   try {
-    plannedPlan = await plan(goal, bus, signal);
+    plannedPlan = await plan(goal, bus, signal, attachmentContext, mode);
   } catch (e) {
-    bus.emit({ kind: "error", message: `Planner failed: ${(e as Error).message}` });
+    console.error("Planner failed", e);
+    bus.emit({ kind: "error", message: "The planner could not produce a safe execution plan." });
     await bus.close("failed");
     return;
   }
@@ -95,14 +104,15 @@ export async function runSwarm(goal: string, bus: EventBus, signal?: AbortSignal
         tokensIn += estTokens(task.brief) + depContext.reduce((n, d) => n + estTokens(d.output), 0);
 
         try {
-          let output = await runWorker(agentId, task, depContext, bus, undefined, signal);
+          let output = await runWorker(agentId, task, depContext, bus, undefined, signal, mode);
           tokensOut += estTokens(output);
 
-          // Validator gate with one self-correcting retry.
-          for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+          // Validation depth is part of the selected execution policy: low
+          // performs one gate, auto can revise once, and max can revise twice.
+          for (let attempt = 0; attempt <= policy.maxRevisions; attempt++) {
             bus.emit({ kind: "agent.status", id: agentId, status: "validating" });
             bus.emit({ kind: "message", from: agentId, to: "validator", label: "review" });
-            const verdict = await validate(task, output, signal);
+            const verdict = await validate(task, output, signal, mode);
             bus.emit({
               kind: "validate.result",
               id: agentId,
@@ -111,12 +121,12 @@ export async function runSwarm(goal: string, bus: EventBus, signal?: AbortSignal
               score: verdict.score,
               feedback: verdict.feedback,
             });
-            if (verdict.approved || attempt === MAX_RETRIES) break;
+            if (verdict.approved || attempt === policy.maxRevisions) break;
 
             // Feedback-based self-correction: the same worker reruns with the
             // validator's concrete feedback appended to its prompt.
             bus.emit({ kind: "message", from: "validator", to: agentId, label: "revise" });
-            output = await runWorker(agentId, task, depContext, bus, verdict.feedback, signal);
+            output = await runWorker(agentId, task, depContext, bus, verdict.feedback, signal, mode);
             tokensOut += estTokens(output);
           }
 
@@ -124,8 +134,9 @@ export async function runSwarm(goal: string, bus: EventBus, signal?: AbortSignal
           bus.emit({ kind: "task.done", taskId: task.id, agentId, output });
           completed.set(task.id, { task, agentId, output });
         } catch (e) {
+          console.error(`Agent ${agentId} failed`, e);
           bus.emit({ kind: "agent.status", id: agentId, status: "failed" });
-          bus.emit({ kind: "error", agentId, message: (e as Error).message });
+          bus.emit({ kind: "error", agentId, message: "This specialist could not complete its task." });
           // Record an empty result so dependents can still proceed.
           // Product tradeoff: this favors completing the run over strict quality.
           // A production system should mark this as degraded/untrusted.
@@ -165,10 +176,14 @@ export async function runSwarm(goal: string, bus: EventBus, signal?: AbortSignal
     // The synthesizer receives the full worker corpus. This is simple and high
     // quality for small DAGs, but it is token-expensive as task count/output grows.
     const res = await runText("synthesizer", {
-      system:
+      system: [
         "You are the Synthesizer agent. Fuse the swarm's worker outputs into one cohesive, " +
-        "polished final deliverable that fully answers the original goal. Resolve overlaps, " +
-        "keep the best detail, and structure it cleanly in markdown. Do not mention the agents.",
+          "polished final deliverable that fully answers the original goal. Resolve overlaps, " +
+          "keep the best detail, and structure it cleanly in markdown. Do not mention the agents.",
+        policy.synthesisDirective,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
       prompt: `Original goal:\n${goal}\n\nHow to fuse:\n${plannedPlan.synthesisBrief}\n\nWorker outputs:\n${corpus}`,
       onDelta: (delta) => {
         final += delta;
@@ -180,7 +195,8 @@ export async function runSwarm(goal: string, bus: EventBus, signal?: AbortSignal
     tokensOut += estTokens(final);
     bus.emit({ kind: "agent.status", id: synthId, status: "done" });
   } catch (e) {
-    bus.emit({ kind: "error", agentId: synthId, message: (e as Error).message });
+    console.error("Synthesizer failed", e);
+    bus.emit({ kind: "error", agentId: synthId, message: "Synthesis failed; showing the worker outputs instead." });
     final = corpus; // fall back to raw worker outputs
   }
 

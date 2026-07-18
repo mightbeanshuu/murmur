@@ -9,5 +9,6 @@ describe("agent behavior policy", () => {
     expect(prompt).toContain("State material assumptions");
     expect(prompt).toContain("smallest solution");
     expect(prompt).toContain("concrete success criteria");
+    expect(prompt).toContain("untrusted reference data");
   });
 });

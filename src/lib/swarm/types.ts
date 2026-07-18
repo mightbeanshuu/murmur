@@ -18,6 +18,9 @@ export type AgentStatus =
   | "done"
   | "failed";
 
+export const SWARM_MODES = ["low", "auto", "max"] as const;
+export type SwarmMode = (typeof SWARM_MODES)[number];
+
 /** A unit of work in the plan DAG. */
 export interface SwarmTask {
   id: string;

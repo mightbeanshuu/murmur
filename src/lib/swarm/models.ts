@@ -1,6 +1,6 @@
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 
-export type Role = "planner" | "validator" | "worker" | "synthesizer";
+export type Role = "planner" | "validator" | "worker" | "synthesizer" | "vision";
 
 const openrouter = createOpenRouter({ apiKey: process.env.OPENROUTER_API_KEY });
 export const model = (id: string) => openrouter(id);
@@ -22,12 +22,18 @@ const FREE_CHAT = [
   "google/gemma-4-31b-it:free",
   "meta-llama/llama-3.3-70b-instruct:free",
 ];
+const FREE_VISION = [
+  "google/gemma-4-31b-it:free",
+  "nvidia/nemotron-nano-12b-v2-vl:free",
+  "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+];
 
 const ENV_OVERRIDE: Record<Role, string | undefined> = {
   planner: process.env.MURMUR_PLANNER_MODEL,
   validator: process.env.MURMUR_VALIDATOR_MODEL,
   worker: process.env.MURMUR_WORKER_MODEL,
   synthesizer: process.env.MURMUR_SYNTH_MODEL,
+  vision: process.env.MURMUR_VISION_MODEL,
 };
 
 // Cached probe: does this key have paid access? A SUCCESSFUL result (true or
@@ -56,7 +62,11 @@ function hasPaidAccess(): Promise<boolean> {
 /** Ordered list of model ids to try for a role. Claude first when the key is paid. */
 export async function chainFor(role: Role): Promise<string[]> {
   const paid = await hasPaidAccess();
-  const pool = role === "worker" ? FREE_CHAT : role === "synthesizer" ? FREE_CHAT : FREE_STRUCTURED;
+  const pool = role === "vision"
+    ? FREE_VISION
+    : role === "worker" || role === "synthesizer"
+      ? FREE_CHAT
+      : FREE_STRUCTURED;
   // Workers stay free even on a paid key (cost control); other roles prefer Claude.
   const head = [ENV_OVERRIDE[role], paid && role !== "worker" ? CLAUDE : undefined].filter(
     Boolean,

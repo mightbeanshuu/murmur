@@ -13,7 +13,7 @@ export async function executeSwarm(input: SwarmWorkflowInput) {
   const pulse = setInterval(() => heartbeat({ runId: input.runId }), 10_000);
 
   try {
-    await runSwarm(input.goal, bus, cancellationSignal());
+    await runSwarm(input.goal, bus, cancellationSignal(), input.context, input.mode);
   } finally {
     clearInterval(pulse);
   }

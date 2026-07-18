@@ -3,12 +3,14 @@ import { EventBus } from "./bus";
 import { runSwarm } from "./orchestrator";
 import { createRunSession, finishRunSession } from "./session";
 import { readDurableEvents } from "./sse";
-import type { SwarmEvent } from "./types";
+import type { SwarmEvent, SwarmMode } from "./types";
 
-interface LaunchSwarmInput {
+export interface LaunchSwarmInput {
   runId: string;
   ownerId: string;
   goal: string;
+  context?: string;
+  mode: SwarmMode;
   signal: AbortSignal;
 }
 
@@ -32,6 +34,8 @@ export async function launchSwarm(input: LaunchSwarmInput): Promise<RunningSwarm
         runId: input.runId,
         ownerId: input.ownerId,
         goal: input.goal,
+        context: input.context,
+        mode: input.mode,
       });
     } catch (error) {
       await finishRunSession(input.runId, "failed").catch(() => undefined);
@@ -45,8 +49,9 @@ export async function launchSwarm(input: LaunchSwarmInput): Promise<RunningSwarm
   }
 
   const bus = new EventBus(input.runId, input.ownerId);
-  runSwarm(input.goal, bus, input.signal).catch(async (error) => {
-    bus.emit({ kind: "error", message: (error as Error).message });
+  runSwarm(input.goal, bus, input.signal, input.context, input.mode).catch(async (error) => {
+    console.error(`Direct swarm ${input.runId} failed`, error);
+    bus.emit({ kind: "error", message: "The swarm stopped because an internal dependency failed." });
     try {
       await bus.close("failed");
     } catch (deliveryError) {
