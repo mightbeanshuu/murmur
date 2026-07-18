@@ -3,6 +3,7 @@
 import { useCallback, useRef } from "react";
 import { useSwarm } from "./store";
 import type { SwarmEvent } from "./swarm/types";
+import type { SwarmAttachment, SwarmMode } from "./swarm/request";
 
 /** Opens the streaming swarm run and feeds every event into the store. */
 export function useRunSwarm() {
@@ -12,7 +13,7 @@ export function useRunSwarm() {
   const abortRef = useRef<AbortController | null>(null);
 
   return useCallback(
-    async (goal: string) => {
+    async (goal: string, attachments: SwarmAttachment[] = [], mode: SwarmMode = "auto") => {
       abortRef.current?.abort();
       const ctrl = new AbortController();
       abortRef.current = ctrl;
@@ -23,7 +24,7 @@ export function useRunSwarm() {
         res = await fetch("/api/swarm", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ goal }),
+          body: JSON.stringify({ goal, attachments, mode }),
           signal: ctrl.signal,
         });
       } catch (e) {

@@ -1,7 +1,4 @@
-import { GoalBar } from "@/components/GoalBar";
-import { SwarmGraph } from "@/components/SwarmGraph";
-import { SidePanel } from "@/components/SidePanel";
-import { RecentRuns } from "@/components/RecentRuns";
+import { Workspace } from "@/components/Workspace";
 import { UserMenu } from "@/components/UserMenu";
 import { SystemStatus } from "@/components/SystemStatus";
 import { BillingControls } from "@/components/BillingControls";
@@ -66,15 +63,7 @@ export default async function Home({
         </div>
       ) : null}
 
-      <GoalBar />
-
-      <section className="murmur-stage">
-        <RecentRuns />
-        <div className="murmur-graph">
-          <SwarmGraph />
-        </div>
-        <SidePanel />
-      </section>
+      <Workspace userName={session.user.name} />
     </main>
   );
 }
