@@ -43,6 +43,19 @@ func TestLoadConfigAcceptsHostedKafkaTLSAndSASL(t *testing.T) {
 	}
 }
 
+func TestKafkaOptionsRejectsInvalidProjectCA(t *testing.T) {
+	_, err := kafkaOptions(config{
+		brokers: []string{"kafka.example.com:12345"},
+		topic:   "murmur.swarm.events",
+		groupID: "murmur-telemetry-v1",
+		ssl:     true,
+		caCert:  "not a certificate",
+	})
+	if err == nil {
+		t.Fatal("expected invalid KAFKA_CA_CERT error")
+	}
+}
+
 func TestLoadConfigRequiresCompleteSASLCredentials(t *testing.T) {
 	t.Setenv("KAFKA_USERNAME", "consumer")
 	t.Setenv("KAFKA_PASSWORD", "")

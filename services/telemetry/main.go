@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +28,7 @@ type config struct {
 	groupID       string
 	address       string
 	ssl           bool
+	caCert        string
 	saslMechanism string
 	username      string
 	password      string
@@ -234,6 +236,7 @@ func loadConfig() (config, error) {
 		groupID:       env("KAFKA_TELEMETRY_GROUP_ID", "murmur-telemetry-v1"),
 		address:       ":" + port,
 		ssl:           ssl,
+		caCert:        strings.ReplaceAll(strings.TrimSpace(os.Getenv("KAFKA_CA_CERT")), `\n`, "\n"),
 		saslMechanism: env("KAFKA_SASL_MECHANISM", "plain"),
 		username:      username,
 		password:      password,
@@ -250,7 +253,18 @@ func kafkaOptions(cfg config) ([]kgo.Opt, error) {
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 	}
 	if cfg.ssl {
-		options = append(options, kgo.DialTLSConfig(&tls.Config{MinVersion: tls.VersionTLS12}))
+		tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+		if cfg.caCert != "" {
+			roots, err := x509.SystemCertPool()
+			if err != nil || roots == nil {
+				roots = x509.NewCertPool()
+			}
+			if !roots.AppendCertsFromPEM([]byte(cfg.caCert)) {
+				return nil, errors.New("KAFKA_CA_CERT does not contain a valid PEM certificate")
+			}
+			tlsConfig.RootCAs = roots
+		}
+		options = append(options, kgo.DialTLSConfig(tlsConfig))
 	}
 	if cfg.username == "" {
 		return options, nil

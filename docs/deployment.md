@@ -24,6 +24,9 @@
 4. Set `KAFKA_SSL=1`, `KAFKA_SASL_MECHANISM=scram-sha-256`, and
    `KAFKA_SWARM_EVENTS_TOPIC=murmur.swarm.events`.
 
+If the SASL endpoint uses Aiven's project CA instead of a public Let's Encrypt
+certificate, add the complete PEM value as encrypted `KAFKA_CA_CERT`.
+
 Aiven may power off an inactive free service. A required Kafka dependency means
 Murmur will reject runs until that service is active again.
 

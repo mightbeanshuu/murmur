@@ -1,4 +1,5 @@
 import type { SASLOptions } from "kafkajs";
+import type { ConnectionOptions } from "node:tls";
 
 export class InfrastructureConfigError extends Error {
   constructor(message: string) {
@@ -11,7 +12,7 @@ export interface KafkaInfrastructureConfig {
   brokers: string[];
   clientId: string;
   topic: string;
-  ssl: boolean;
+  ssl: boolean | ConnectionOptions;
   sasl?: SASLOptions;
   connectionTimeoutMs: number;
   requestTimeoutMs: number;
@@ -67,6 +68,16 @@ function kafkaSasl(): SASLOptions | undefined {
   );
 }
 
+function kafkaTls(): boolean | ConnectionOptions {
+  if (!bool("KAFKA_SSL")) return false;
+  const certificate = process.env.KAFKA_CA_CERT?.trim();
+  if (!certificate) return true;
+  return {
+    ca: [certificate.replace(/\\n/g, "\n")],
+    rejectUnauthorized: true,
+  };
+}
+
 export function getKafkaConfig(): KafkaInfrastructureConfig {
   const brokers = required("KAFKA_BROKERS")
     .split(",")
@@ -88,7 +99,7 @@ export function getKafkaConfig(): KafkaInfrastructureConfig {
     brokers,
     clientId: process.env.KAFKA_CLIENT_ID?.trim() || "murmur-web",
     topic,
-    ssl: bool("KAFKA_SSL"),
+    ssl: kafkaTls(),
     sasl: kafkaSasl(),
     connectionTimeoutMs: positiveInt("KAFKA_CONNECTION_TIMEOUT_MS", 5_000),
     requestTimeoutMs: positiveInt("KAFKA_REQUEST_TIMEOUT_MS", 30_000),

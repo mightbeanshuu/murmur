@@ -20,6 +20,18 @@ describe("Kafka infrastructure configuration", () => {
     });
   });
 
+  it("loads an Aiven project CA without weakening certificate verification", () => {
+    vi.stubEnv("KAFKA_BROKERS", "kafka.example.com:12345");
+    vi.stubEnv("KAFKA_SWARM_EVENTS_TOPIC", "murmur.swarm.events");
+    vi.stubEnv("KAFKA_SSL", "1");
+    vi.stubEnv("KAFKA_CA_CERT", "-----BEGIN CERTIFICATE-----\\ncertificate\\n-----END CERTIFICATE-----");
+
+    expect(getKafkaConfig().ssl).toEqual({
+      ca: ["-----BEGIN CERTIFICATE-----\ncertificate\n-----END CERTIFICATE-----"],
+      rejectUnauthorized: true,
+    });
+  });
+
   it("rejects missing broker configuration", () => {
     vi.stubEnv("KAFKA_BROKERS", "");
     vi.stubEnv("KAFKA_SWARM_EVENTS_TOPIC", "murmur.swarm.events");
