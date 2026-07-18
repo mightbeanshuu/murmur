@@ -20,6 +20,14 @@
 - Temporal owns workflow execution history.
 - Zustand owns only the current browser projection.
 
+## Research and MCP boundaries
+
+- Researcher tasks call Firecrawl only from the server through a fixed HTTPS endpoint; the browser never receives the provider key.
+- Search results are URL-validated, count-bounded, excerpt-bounded, and framed as untrusted reference data before entering a worker prompt.
+- Source links remain in the final Markdown, so downstream CLI agents can inspect the evidence instead of receiving an opaque summary.
+- `/api/mcp` exposes only `list_runs` and `get_final_deliverable`. Both are read-only, owner-scoped, and operate inside the existing run-retention window.
+- MCP bearer tokens are shown once and persisted only as SHA-256 hashes. The MCP boundary cannot launch, mutate, or delete swarms.
+
 ## Failure behavior
 
 - Missing session: HTTP 401 before infrastructure or model work.

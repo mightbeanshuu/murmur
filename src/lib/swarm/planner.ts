@@ -37,7 +37,9 @@ NO dependencies so they all run at once. Only add a dependency when a task genui
 needs another's output; avoid long dependency chains. Each task must be self-contained and assigned to
 the best-fit specialist: researcher (gather/structure knowledge), analyst (reason,
 compare, evaluate trade-offs), writer (produce prose/sections), coder (produce code
-or technical specs). Keep the graph tight — no redundant tasks.`;
+or technical specs). When the goal depends on current facts, external evidence, market data,
+papers, products, or public sources, include a researcher task and make its brief a precise,
+search-ready evidence request. Keep the graph tight — no redundant tasks.`;
 
 function plannerSystem(mode: SwarmMode) {
   if (mode === "auto") return SYSTEM;

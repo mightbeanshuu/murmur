@@ -1,28 +1,30 @@
 "use client";
 
 import { useSwarm } from "@/lib/store";
-import { PlusIcon } from "./ui/Icons";
+import { ArrowLeftIcon } from "./ui/Icons";
 
 export function NewSwarmButton() {
   const runStatus = useSwarm((state) => state.runStatus);
   const goHome = useSwarm((state) => state.goHome);
   const running = runStatus === "running";
 
+  if (runStatus === "idle") return null;
+
   return (
     <button
       className="murmur-icon-link murmur-new-swarm"
       type="button"
       disabled={running}
-      title={running ? "Wait for the active swarm to finish" : "Start a new swarm"}
+      title={running ? "Wait for the active swarm to finish" : "Return to the Home composer"}
       onClick={() => {
-        if (runStatus !== "idle") goHome();
+        goHome();
         window.requestAnimationFrame(() => {
           document.querySelector<HTMLTextAreaElement>('[aria-label="Swarm goal"]')?.focus();
         });
       }}
     >
-      <PlusIcon size={16} />
-      <span>New swarm</span>
+      <ArrowLeftIcon size={16} />
+      <span>Back to Home</span>
     </button>
   );
 }

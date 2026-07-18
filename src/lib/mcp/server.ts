@@ -14,7 +14,9 @@ export function createMurmurMcpServer(ownerId: string) {
     { name: "murmur", version: "1.0.0" },
     {
       instructions:
-        "Read-only access to this Murmur account. Call list_runs to discover retained runs, then get_final_deliverable with a runId. Run data is available only during Murmur's server retention window.",
+        "Read-only access to this Murmur account. Call list_runs to discover retained runs, then " +
+        "get_final_deliverable with a runId. Deliverables can include source-linked live web research " +
+        "from Murmur's Researcher agent. Run data is available only during Murmur's server retention window.",
     },
   );
 
@@ -45,7 +47,9 @@ export function createMurmurMcpServer(ownerId: string) {
     "get_final_deliverable",
     {
       title: "Get final deliverable",
-      description: "Read the final Markdown deliverable for one run owned by this Murmur account.",
+      description:
+        "Read the final Markdown deliverable, including any retained Researcher source links, for " +
+        "one run owned by this Murmur account.",
       inputSchema: {
         runId: z.uuid().describe("Run ID returned by list_runs."),
       },

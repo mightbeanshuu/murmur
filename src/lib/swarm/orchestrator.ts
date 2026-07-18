@@ -6,6 +6,7 @@ import { validate } from "./validator";
 import { runText } from "./run";
 import type { SwarmMode, SwarmPlan, SwarmTask } from "./types";
 import { executionPolicy } from "./executionMode";
+import { searchWeb } from "../research/firecrawl";
 import {
   approximateTokens,
   boundContext,
@@ -110,11 +111,17 @@ export async function runSwarm(
           })),
           contextBudget.dependencyChars,
         );
+        const webResearch = task.type === "researcher"
+          ? await searchWeb(`${goal}\n\n${task.title}\n${task.brief}`, signal)
+          : undefined;
 
-        tokensIn += approximateTokens(task.brief) + approximateTokens(boundedDependencies);
+        tokensIn +=
+          approximateTokens(task.brief) +
+          approximateTokens(boundedDependencies) +
+          approximateTokens(webResearch?.context ?? "");
 
         try {
-          let output = await runWorker(agentId, task, depContext, bus, undefined, signal, mode);
+          let output = await runWorker(agentId, task, depContext, bus, undefined, signal, mode, webResearch);
           tokensOut += approximateTokens(output);
 
           // Validation depth is part of the selected execution policy: low
@@ -143,8 +150,9 @@ export async function runSwarm(
             tokensIn +=
               approximateTokens(task.brief) +
               approximateTokens(boundedDependencies) +
+              approximateTokens(webResearch?.context ?? "") +
               approximateTokens(boundContext(verdict.feedback, contextBudget.revisionChars));
-            output = await runWorker(agentId, task, depContext, bus, verdict.feedback, signal, mode);
+            output = await runWorker(agentId, task, depContext, bus, verdict.feedback, signal, mode, webResearch);
             tokensOut += approximateTokens(output);
           }
 

@@ -4,7 +4,6 @@ import { ChangeEvent, FormEvent, useEffect, useId, useRef, useState } from "reac
 import { useSwarm } from "@/lib/store";
 import { useRunSwarm } from "@/lib/useRunSwarm";
 import {
-  AgentIcon,
   CloseIcon,
   GitHubIcon,
   LayersIcon,
@@ -353,7 +352,7 @@ export function GoalBar({ mode = "compact" }: GoalBarProps) {
             }}
             className="murmur-input"
             disabled={busy}
-            rows={onboarding ? 4 : 2}
+            rows={onboarding ? 3 : 2}
             maxLength={2000}
             aria-label="Swarm goal"
             aria-describedby={attachmentError ? "murmur-attachment-error" : undefined}
@@ -494,15 +493,6 @@ export function GoalBar({ mode = "compact" }: GoalBarProps) {
               {example.label}
             </button>
           ))}
-        </div>
-        <div className={`murmur-pipeline${busy ? " is-live" : ""}`} aria-label="Swarm execution phases">
-          <span><AgentIcon type="planner" size={14} />Plan</span>
-          <i />
-          <span><AgentIcon type="researcher" size={14} />Execute</span>
-          <i />
-          <span><AgentIcon type="validator" size={14} />Validate</span>
-          <i />
-          <span><AgentIcon type="synthesizer" size={14} />Synthesize</span>
         </div>
       </div>
     </section>

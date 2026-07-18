@@ -21,6 +21,8 @@ The system pairs a focused product experience with production-grade identity, bi
 - SSE streams live events to a Zustand store and React Flow graph.
 - Zod validates the planner and validator's structured LLM outputs.
 - Cloudinary stores attached images as authenticated assets before a vision model derives instruction-resistant text context.
+- Researcher agents use bounded Firecrawl web search, preserve source links, and state clearly when live search is unavailable.
+- A read-only, account-scoped Streamable HTTP MCP server lets Codex or Claude Code discover retained runs and retrieve final Markdown deliverables.
 
 ## Request path
 
@@ -45,9 +47,19 @@ Temporal Worker → swarm Activity → planner → DAG workers → validators �
 Redis event stream ──SSE──▶ Zustand ──▶ React Flow
           │
           └─ Kafka ──▶ Go telemetry consumer ──▶ /metrics
+
+Codex / Claude Code ──bearer token──▶ /api/mcp
+                                      ├─ list_runs
+                                      └─ get_final_deliverable (Markdown + retained source links)
 ```
 
 The planner, worker, validator, and synthesizer are code roles, not separate servers. TypeScript controls their order and data flow; the LLM supplies language reasoning.
+
+## Live research and MCP handoff
+
+When a goal needs current public evidence, the planner assigns a Researcher task. The server sends a bounded query to Firecrawl, accepts only HTTP(S) source URLs, caps source count and excerpt size, marks page content as untrusted, and asks the Researcher to cite the supplied links. Search failures become an explicit limitation in the prompt instead of a fabricated browsing claim.
+
+The resulting citations flow through validation and synthesis into the retained final Markdown. A user can create one account-wide read-only token in **Connect MCP**, configure either Codex or Claude Code, call `list_runs`, then call `get_final_deliverable`. Raw tokens are shown once, stored only as SHA-256 hashes, scoped to the authenticated owner, and cannot start, edit, or delete runs.
 
 ## Execution modes
 
@@ -103,12 +115,13 @@ Routes authenticate and translate HTTP. `launchSwarm` hides direct-vs-Temporal e
 
 ## Local setup
 
-Requirements: Node.js 20+, pnpm 11, Docker, and an OpenRouter API key.
+Requirements: Node.js 20+, pnpm 11, Docker, and an OpenRouter API key. A Firecrawl API key is optional but required for live Researcher web search.
 
 ```bash
 pnpm install
 cp .env.example .env.local
 # Fill OPENROUTER_API_KEY and BETTER_AUTH_SECRET.
+# Fill FIRECRAWL_API_KEY to enable sourced live Researcher searches.
 # Image attachments also need the three CLOUDINARY_* values; Stripe is optional.
 
 pnpm infra:up
