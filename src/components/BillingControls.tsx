@@ -33,7 +33,7 @@ export function BillingControls({ plan }: { plan: BillingPlan }) {
       >
         <CreditCardIcon size={16} />
         <span className="murmur-plan">{plan === "pro" ? "Pro" : "Free"}</span>
-        <span className="murmur-plan-copy">{plan === "pro" ? "100 runs/hr" : "10 runs/hr"}</span>
+        <span className="murmur-plan-copy">{plan === "pro" ? "100 runs/hr" : "3 runs/hr · 1 Max"}</span>
         <strong>{loading ? "Opening…" : plan === "pro" ? "Manage" : "Upgrade"}</strong>
       </button>
       {error ? <span className="murmur-billing-error" role="status">{error}</span> : null}

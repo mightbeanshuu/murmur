@@ -55,7 +55,7 @@ export function AuthForm() {
           <p>
             {mode === "sign-in"
               ? "Continue orchestrating and replaying your swarms."
-              : "Start with 10 durable swarm runs every hour."}
+              : "Start with 3 durable swarm runs every hour, including 1 Max run."}
           </p>
         </div>
       </div>

@@ -5,6 +5,7 @@ import { listRuns, seedOnce, type SavedRun } from "@/lib/history";
 import { SAMPLE_RUN } from "@/lib/sampleRun";
 import { useSwarm } from "@/lib/store";
 import { GoalBar } from "./GoalBar";
+import { AmbientRelayVideo } from "./AmbientRelayVideo";
 import { RecentRuns } from "./RecentRuns";
 import { SidePanel } from "./SidePanel";
 import { SwarmGraph } from "./SwarmGraph";
@@ -73,7 +74,9 @@ export function Workspace({ userName }: WorkspaceProps) {
 
   return (
     <section className="murmur-onboarding" aria-labelledby="murmur-welcome-title">
-      <div className="murmur-onboarding-media" aria-hidden="true" />
+      <div className="murmur-onboarding-media" aria-hidden="true">
+        <AmbientRelayVideo />
+      </div>
       <div className="murmur-onboarding-scrim" aria-hidden="true" />
       <div className="murmur-onboarding-content">
         <div className="murmur-welcome-copy">

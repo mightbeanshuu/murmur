@@ -32,7 +32,7 @@ const MAX_TEXT_BYTES = 32 * 1024;
 const MAX_TOTAL_TEXT_BYTES = 64 * 1024;
 const MAX_IMAGE_BYTES = 1024 * 1024;
 const MAX_TOTAL_IMAGE_BYTES = 2 * 1024 * 1024;
-const MAX_REQUEST_BYTES = 2_500_000;
+const MAX_REQUEST_BYTES = 3_000_000;
 const TEXT_EXTENSIONS = new Set([
   "c", "cc", "cpp", "css", "csv", "go", "html", "java", "js", "json", "jsx", "md",
   "py", "rb", "rs", "sh", "sql", "text", "toml", "ts", "tsx", "txt", "xml", "yaml", "yml",
@@ -180,7 +180,7 @@ export function GoalBar({ mode = "compact" }: GoalBarProps) {
       mode: swarmDepth,
     })).byteLength;
     if (requestBytes > MAX_REQUEST_BYTES) {
-      setAttachmentError("Attached context exceeds the 2.5 MB request limit. Remove one item and try again.");
+      setAttachmentError("Attached context exceeds the 3 MB request limit. Remove one item and try again.");
       return;
     }
     setGoal(cleanGoal);
@@ -399,7 +399,7 @@ export function GoalBar({ mode = "compact" }: GoalBarProps) {
         >
           <GitHubIcon size={15} /> GitHub repository
         </button>
-        <span className="murmur-attachment-limits">4 items · text 32 KB each · images 1 MB each · 2.5 MB request</span>
+        <span className="murmur-attachment-limits">4 items · text 32 KB each · images 1 MB each · 3 MB request</span>
       </div>
 
       <div className="murmur-mode-row">
