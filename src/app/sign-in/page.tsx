@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { AuthForm } from "@/components/AuthForm";
 import { AuthSwarmGraph } from "@/components/AuthSwarmGraph";
+import { AmbientRelayVideo } from "@/components/AmbientRelayVideo";
 import { auth } from "@/lib/auth";
 import { MurmurBrand } from "@/components/ui/Brand";
 import {
@@ -25,6 +26,9 @@ export default async function SignInPage() {
   return (
     <main className="murmur-auth-page">
       <section className="murmur-auth-showcase" aria-labelledby="murmur-auth-title">
+        <div className="murmur-auth-video" aria-hidden="true">
+          <AmbientRelayVideo />
+        </div>
         <div className="murmur-auth-showcase-top">
           <MurmurBrand tagline="Live agent swarm orchestration" />
           <a

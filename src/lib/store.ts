@@ -38,6 +38,7 @@ interface State {
   error: string | null;
 
   reset: (goal: string) => void;
+  goHome: () => void;
   setRunId: (runId: string) => void;
   select: (id: string | null) => void;
   apply: (e: SwarmEvent) => void;
@@ -99,6 +100,22 @@ export const useSwarm = create<State>((set) => ({
         },
       },
       order: [PLANNER_ID, VALIDATOR_ID],
+      edges: [],
+      selected: null,
+      final: "",
+      stats: null,
+      error: null,
+    }),
+
+  goHome: () =>
+    set({
+      runStatus: "idle",
+      runId: null,
+      goal: "",
+      planSummary: "",
+      planThinking: "",
+      agents: {},
+      order: [],
       edges: [],
       selected: null,
       final: "",

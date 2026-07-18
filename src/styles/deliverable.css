@@ -139,7 +139,11 @@
 }
 
 .murmur-deliverable-reader-actions button {
+  display: inline-flex;
   min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
   background: var(--surface-raised);
@@ -267,7 +271,9 @@
 
   .murmur-deliverable-reader-head { min-height: 58px; padding: 8px 10px; }
   .murmur-deliverable-reader-title p { display: none; }
-  .murmur-deliverable-reader-actions button:first-child { padding-inline: 9px; }
+  .murmur-deliverable-reader-actions { gap: 5px; }
+  .murmur-deliverable-reader-actions button { padding-inline: 9px; }
+  .murmur-deliverable-reader-actions button:not(.murmur-deliverable-close) svg { display: none; }
   .murmur-deliverable-reader-scroll { padding: 28px 16px 56px; }
   .murmur-deliverable-reader .murmur-md { font-size: 14px; }
   .murmur-deliverable-reader .murmur-md h1 { font-size: 24px; }
@@ -275,6 +281,38 @@
   .murmur-deliverable-reader .murmur-md h3 { font-size: 16px; }
   .murmur-deliverable-reader .murmur-md th,
   .murmur-deliverable-reader .murmur-md td { min-width: 150px; padding: 10px 12px; }
+}
+
+@media print {
+  @page { size: A4; margin: 16mm; }
+
+  body { overflow: visible !important; background: #f6f3ff !important; }
+  body * { visibility: hidden !important; }
+  .murmur-deliverable-dialog,
+  .murmur-deliverable-dialog * { visibility: visible !important; }
+  .murmur-deliverable-dialog {
+    position: absolute !important;
+    inset: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+    border: 0 !important;
+    background: #f6f3ff !important;
+    color: #171322 !important;
+  }
+  .murmur-deliverable-reader { height: auto !important; background: #f6f3ff !important; }
+  .murmur-deliverable-reader-head { display: none !important; }
+  .murmur-deliverable-reader-scroll { overflow: visible !important; padding: 0 !important; }
+  .murmur-deliverable-document { width: 100% !important; }
+  .murmur-deliverable-reader .murmur-md,
+  .murmur-deliverable-reader .murmur-md strong,
+  .murmur-deliverable-reader .murmur-md h1,
+  .murmur-deliverable-reader .murmur-md h2,
+  .murmur-deliverable-reader .murmur-md h3 { color: #171322 !important; }
+  .murmur-deliverable-reader .murmur-md table { display: table; overflow: visible; }
+  .murmur-deliverable-reader .murmur-md th { background: #e1dbea !important; }
+  .murmur-deliverable-reader .murmur-md th,
+  .murmur-deliverable-reader .murmur-md td { min-width: 0; border-color: #aaa1b9 !important; }
 }
 
 @media (prefers-reduced-motion: reduce) {

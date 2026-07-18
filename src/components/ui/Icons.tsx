@@ -41,6 +41,15 @@ export function CheckIcon(props: IconProps) {
   );
 }
 
+export function ChatIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M5.5 5h13A2.5 2.5 0 0 1 21 7.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-5.5 3v-3.6A2.5 2.5 0 0 1 3 15V7.5A2.5 2.5 0 0 1 5.5 5Z" {...strokeProps} />
+      <path d="M7.5 10h9M7.5 13.5h5.5" {...strokeProps} />
+    </Icon>
+  );
+}
+
 export function ChevronDownIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -130,6 +139,22 @@ export function MaximizeIcon(props: IconProps) {
   );
 }
 
+export function DownloadIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M12 3v11M7.5 10.5 12 15l4.5-4.5M5 19h14" {...strokeProps} />
+    </Icon>
+  );
+}
+
+export function PlusIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M12 5v14M5 12h14" {...strokeProps} />
+    </Icon>
+  );
+}
+
 export function RadioIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -145,6 +170,15 @@ export function RocketIcon(props: IconProps) {
       <path d="M13.7 4.2c2.1-1.2 4.2-.9 5.9-.6.3 1.7.6 3.8-.6 5.9l-5.6 7-5.9-5.9 6.2-6.4Z" {...strokeProps} />
       <circle cx="15.5" cy="7.6" r="1.5" {...strokeProps} />
       <path d="M8.5 9.6 5 10.1l-2 2 4.1 1M14 16.1l-1 4.1-2 1.9-.8-4.3M7.4 16.6c-1.5.1-2.6 1.2-2.8 2.8 1.6-.2 2.7-1.3 2.8-2.8Z" {...strokeProps} />
+    </Icon>
+  );
+}
+
+export function SendIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="m3.5 4 17 8-17 8 3-8-3-8Z" {...strokeProps} />
+      <path d="M6.5 12h14" {...strokeProps} />
     </Icon>
   );
 }

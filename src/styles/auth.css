@@ -7,11 +7,41 @@
 }
 
 .murmur-auth-showcase {
+  position: relative;
   display: flex;
   min-width: 0;
   flex-direction: column;
+  overflow: hidden;
   padding: clamp(28px, 5vw, 72px);
   border-right: 1px solid var(--line);
+  isolation: isolate;
+}
+
+.murmur-auth-showcase > :not(.murmur-auth-video) {
+  position: relative;
+  z-index: 1;
+}
+
+.murmur-auth-video {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.murmur-auth-video .murmur-relay-media::after {
+  background:
+    linear-gradient(90deg, rgb(8 7 13 / 14%), rgb(8 7 13 / 42%) 82%, rgb(8 7 13 / 88%)),
+    linear-gradient(180deg, rgb(8 7 13 / 24%), rgb(8 7 13 / 58%)),
+    radial-gradient(circle at 48% 58%, transparent 8%, rgb(8 7 13 / 36%) 76%);
+}
+
+.murmur-auth-video .murmur-relay-media video {
+  opacity: 0.5;
+  filter: saturate(76%) contrast(108%);
+  mask-image: none;
+  object-position: center;
 }
 
 .murmur-auth-showcase-top {

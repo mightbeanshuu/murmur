@@ -4,6 +4,7 @@ import { SystemStatus } from "@/components/SystemStatus";
 import { BillingControls } from "@/components/BillingControls";
 import { McpConnection } from "@/components/McpConnection";
 import { LiveTokenMeter } from "@/components/LiveTokenMeter";
+import { NewSwarmButton } from "@/components/NewSwarmButton";
 import { auth } from "@/lib/auth";
 import { getUserPlan } from "@/lib/billing/repository";
 import { getMcpTokenStatus } from "@/lib/mcp/service";
@@ -30,6 +31,7 @@ export default async function Home({
       <header className="murmur-header">
         <MurmurBrand tagline="Live agent swarm orchestration" />
         <div className="murmur-header-actions">
+          <NewSwarmButton />
           <SystemStatus />
           <LiveTokenMeter />
           <BillingControls plan={plan} />

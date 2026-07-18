@@ -6,6 +6,7 @@ import { SAMPLE_RUN } from "@/lib/sampleRun";
 import { useSwarm } from "@/lib/store";
 import { GoalBar } from "./GoalBar";
 import { AmbientRelayVideo } from "./AmbientRelayVideo";
+import { QuickChat } from "./QuickChat";
 import { RecentRuns } from "./RecentRuns";
 import { SidePanel } from "./SidePanel";
 import { SwarmGraph } from "./SwarmGraph";
@@ -45,6 +46,7 @@ export function Workspace({ userName }: WorkspaceProps) {
     ? greetingFor(name, new Date().getHours())
     : `Ready when you are, ${name}.`;
   const [recent, setRecent] = useState<SavedRun[]>([]);
+  const [homeMode, setHomeMode] = useState<"swarm" | "chat">("swarm");
   const runStatus = useSwarm((state) => state.runStatus);
   const loadRun = useSwarm((state) => state.loadRun);
   const showWorkspace = runStatus !== "idle";
@@ -80,14 +82,44 @@ export function Workspace({ userName }: WorkspaceProps) {
       <div className="murmur-onboarding-scrim" aria-hidden="true" />
       <div className="murmur-onboarding-content">
         <div className="murmur-welcome-copy">
-          <span className="murmur-welcome-signal"><SparklesIcon size={15} /> Swarm ready</span>
+          <span className="murmur-welcome-signal">
+            <SparklesIcon size={15} />
+            {homeMode === "swarm" ? "Swarm ready" : "Direct channel ready"}
+          </span>
           <h1 id="murmur-welcome-title">{greeting}</h1>
-          <p>Turn one ambitious outcome into parallel, inspected, and verified work.</p>
+          <p>
+            {homeMode === "swarm"
+              ? "Turn one ambitious outcome into parallel, inspected, and verified work."
+              : "Get a direct answer without launching a full specialist swarm."}
+          </p>
         </div>
 
-        <GoalBar mode="onboarding" />
+        <div className="murmur-home-mode" role="tablist" aria-label="Choose how Murmur should work">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={homeMode === "swarm"}
+            className={homeMode === "swarm" ? "is-active" : ""}
+            onClick={() => setHomeMode("swarm")}
+          >
+            Agent swarm
+            <small>Parallel specialists</small>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={homeMode === "chat"}
+            className={homeMode === "chat" ? "is-active" : ""}
+            onClick={() => setHomeMode("chat")}
+          >
+            Quick chat
+            <small>One direct answer</small>
+          </button>
+        </div>
 
-        {recent.length ? (
+        {homeMode === "swarm" ? <GoalBar mode="onboarding" /> : <QuickChat />}
+
+        {homeMode === "swarm" && recent.length ? (
           <div className="murmur-onboarding-recents" aria-label="Continue a recent run">
             <span>Continue a recent run</span>
             <div>

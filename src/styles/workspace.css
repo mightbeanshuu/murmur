@@ -44,6 +44,10 @@
 
 .murmur-icon-link { padding: 0 10px; }
 
+.murmur-new-swarm { font-family: inherit; }
+.murmur-new-swarm svg { color: var(--accent); }
+.murmur-new-swarm:disabled { cursor: wait; opacity: 0.48; }
+
 .murmur-icon-link:hover,
 .murmur-system > summary:hover,
 .murmur-user > summary:hover,
@@ -764,6 +768,7 @@
   .murmur-header { flex-wrap: wrap; }
   .murmur-header-actions { margin-left: auto; }
   .murmur-icon-link span,
+  .murmur-new-swarm span,
   .murmur-billing-button strong,
   .murmur-user-summary { display: none; }
   .murmur-stage { min-height: 0; grid-template-areas: "graph" "side"; grid-template-columns: minmax(0, 1fr); grid-template-rows: 540px minmax(480px, auto); }

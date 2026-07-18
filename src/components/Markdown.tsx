@@ -3,10 +3,14 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+export function normalizeMarkdown(markdown: string) {
+  return markdown.replace(/<br\s*\/?>/gi, "  \n");
+}
+
 export function Markdown({ children }: { children: string }) {
   return (
     <div className="murmur-md">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{children}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{normalizeMarkdown(children)}</ReactMarkdown>
     </div>
   );
 }

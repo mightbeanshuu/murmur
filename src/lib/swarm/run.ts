@@ -58,7 +58,13 @@ async function checkModelRateLimit(role: Role, id: string): Promise<"ok" | "skip
 /** Stream plain text, walking the model chain on rate-limit/unavailability. */
 export async function runText(
   role: Role,
-  opts: { system: string; prompt: string; onDelta: (d: string) => void; signal?: AbortSignal },
+  opts: {
+    system: string;
+    prompt: string;
+    onDelta: (d: string) => void;
+    signal?: AbortSignal;
+    maxOutputTokens?: number;
+  },
 ): Promise<{ text: string; modelId: string }> {
   const chain = await chainFor(role);
   let last: unknown;
@@ -69,6 +75,7 @@ export async function runText(
         model: model(id),
         system: withAgentBehaviorPolicy(opts.system),
         prompt: opts.prompt,
+        maxOutputTokens: opts.maxOutputTokens,
         maxRetries: 0,
         abortSignal: attemptSignal(opts.signal),
       });
