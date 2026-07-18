@@ -12,6 +12,7 @@ import ReactFlow, {
 import "reactflow/dist/style.css";
 import { useSwarm, type AgentNode } from "@/lib/store";
 import { AgentFlowNode, type FlowNodeData } from "./AgentFlowNode";
+import { LayersIcon, RadioIcon, SparklesIcon } from "./ui/Icons";
 
 const nodeTypes = { agent: AgentFlowNode };
 
@@ -78,6 +79,8 @@ export function SwarmGraph() {
   const edges = useSwarm((s) => s.edges);
   const selected = useSwarm((s) => s.selected);
   const select = useSwarm((s) => s.select);
+  const runStatus = useSwarm((s) => s.runStatus);
+  const goal = useSwarm((s) => s.goal);
 
   const pos = useMemo(() => layout(agents), [agents]);
 
@@ -119,7 +122,7 @@ export function SwarmGraph() {
             label: e.label,
             animated: liveTarget,
             style: { stroke: color, strokeWidth: liveTarget ? 2 : 1.2, opacity: 0.8 },
-            labelStyle: { fill: "#94a3b8", fontSize: 10 },
+            labelStyle: { fill: "#aaa1b9", fontSize: 10 },
             labelBgStyle: { fill: "#0b0b14", fillOpacity: 0.7 },
             markerEnd: { type: MarkerType.ArrowClosed, color },
           };
@@ -128,20 +131,44 @@ export function SwarmGraph() {
   );
 
   return (
-    <ReactFlow
-      nodes={rfNodes}
-      edges={rfEdges}
-      nodeTypes={nodeTypes}
-      onNodeClick={(_, n) => select(n.id)}
-      onPaneClick={() => select(null)}
-      fitView
-      fitViewOptions={{ padding: 0.25 }}
-      minZoom={0.2}
-      maxZoom={1.5}
-      proOptions={{ hideAttribution: true }}
-    >
-      <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="#1e293b" />
-      <Controls showInteractive={false} />
-    </ReactFlow>
+    <>
+      <div className="murmur-graph-head">
+        <div>
+          <LayersIcon size={16} />
+          <span>
+            <strong>Execution graph</strong>
+            <small>{goal || "Dependencies and agent handoffs appear here"}</small>
+          </span>
+        </div>
+        <span className={`murmur-run-state is-${runStatus}`}>
+          <RadioIcon size={13} />
+          {runStatus === "running" ? "Live" : runStatus === "done" ? "Complete" : runStatus === "error" ? "Interrupted" : "Standby"}
+        </span>
+      </div>
+      <div className="murmur-graph-canvas">
+        <ReactFlow
+          nodes={rfNodes}
+          edges={rfEdges}
+          nodeTypes={nodeTypes}
+          onNodeClick={(_, n) => select(n.id)}
+          onPaneClick={() => select(null)}
+          fitView
+          fitViewOptions={{ padding: 0.25 }}
+          minZoom={0.2}
+          maxZoom={1.5}
+          proOptions={{ hideAttribution: true }}
+        >
+          <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="#29233f" />
+          <Controls showInteractive={false} />
+        </ReactFlow>
+        {rfNodes.length === 0 ? (
+          <div className="murmur-graph-empty">
+            <span><SparklesIcon size={22} /></span>
+            <h3>The graph is ready</h3>
+            <p>Deploy a goal or open a recent run to inspect the swarm.</p>
+          </div>
+        ) : null}
+      </div>
+    </>
   );
 }

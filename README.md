@@ -1,8 +1,13 @@
-# ✺ Murmur
+<p align="center">
+  <img src="public/brand/murmur-logo.svg" width="360" alt="Murmur" />
+</p>
 
-Murmur turns one goal into a live, validated agent swarm. A planner creates a task DAG, workers execute ready tasks in parallel, a validator can request one revision, and a synthesizer produces the final answer while React Flow renders every event.
+<p align="center"><strong>Turn one complex goal into a live, durable, validated agent swarm.</strong></p>
+<p align="center">Plan · Delegate · Execute · Validate · Synthesize</p>
 
-Built for the Microsoft Build AI 2026 Agent Swarms theme.
+Murmur is a production-oriented orchestration workspace and an inspectable engineering portfolio project. A planner creates a task DAG, workers execute ready tasks in parallel, a validator can request one revision, and a synthesizer produces the final answer while React Flow renders every event.
+
+The system pairs a focused product experience with production-grade identity, billing, durable workflows, streaming state, distributed infrastructure, and observability.
 
 ## What makes this a production-shaped project
 
@@ -44,7 +49,7 @@ The planner, worker, validator, and synthesizer are code roles, not separate ser
 ```text
 src/app/                    HTTP/pages: Next.js adapters and UI composition
 src/components/             browser-facing components
-src/lib/auth/               identity persistence
+src/lib/auth.ts             identity and shared authentication policy
 src/lib/billing/            plans, Stripe gateway, entitlement repository
 src/lib/swarm/              orchestration domain + application services
 src/lib/temporal/           durable-workflow client adapter
@@ -105,7 +110,7 @@ For local webhook testing:
 stripe listen --forward-to localhost:3000/api/billing/webhook
 ```
 
-Checkout and Portal routes always derive the Stripe customer from the authenticated server session. Webhooks verify the signature against the raw HTTP body before changing Pro access. Repeated subscription events are safe because they upsert the same row.
+Checkout and Portal routes always derive the Stripe customer from the authenticated server session. Webhooks verify the raw signed body, deduplicate event IDs transactionally, reconcile the customer's current Stripe subscriptions, and reject customer-to-user ownership mismatches before changing Pro access.
 
 ## Why Go is here
 
@@ -118,6 +123,10 @@ Go is not a second Murmur backend. `services/telemetry` is a distinct Kafka cons
 - shuts down gracefully.
 
 Deleting the Go service would remove metrics, but authentication, AI orchestration, and the UI would still work. That independence is the point.
+
+Kafka is strict by default. Constrained serverless demos can explicitly set
+`MURMUR_KAFKA_REQUIRED=0`; Redis remains durable and runs continue, while Kafka/Go
+telemetry is visibly absent. Full deployments and local Compose keep strict mode.
 
 ## Commands
 
@@ -149,3 +158,6 @@ Vercel can host the Next.js web adapter, but it cannot host the continuously pol
 - production auth, OpenRouter, Stripe, and infrastructure environment variables.
 
 Do not use Compose hostnames or `localhost` from Vercel. Use TLS-enabled managed endpoints and run `pnpm db:migrate` as a release step. See [docs/architecture.md](docs/architecture.md) and [docs/deployment.md](docs/deployment.md).
+
+Vercel Production builds use `scripts/vercel-build.ts` to run those idempotent
+release migrations before `next build`; Preview builds never mutate Production.

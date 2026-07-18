@@ -91,6 +91,17 @@ export function getKafkaConfig(): KafkaInfrastructureConfig {
   };
 }
 
+/** Kafka is strict by default; serverless demos may explicitly disable it. */
+export function isKafkaRequired() {
+  return bool("MURMUR_KAFKA_REQUIRED", true);
+}
+
+export function isKafkaConfigured() {
+  return Boolean(
+    process.env.KAFKA_BROKERS?.trim() && process.env.KAFKA_SWARM_EVENTS_TOPIC?.trim(),
+  );
+}
+
 export function getRedisConfig(): RedisInfrastructureConfig {
   const url = required("REDIS_URL");
   let parsed: URL;

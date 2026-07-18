@@ -9,6 +9,8 @@ import { auth } from "@/lib/auth";
 import { getUserPlan } from "@/lib/billing/repository";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { MurmurBrand } from "@/components/ui/Brand";
+import { CheckIcon, GitHubIcon, WarningIcon } from "@/components/ui/Icons";
 
 export default async function Home({
   searchParams,
@@ -22,18 +24,19 @@ export default async function Home({
   return (
     <main className="murmur-app">
       <header className="murmur-header">
-        <div className="murmur-brand">
-          <span className="murmur-logo">✺</span>
-          <div>
-            <h1>Murmur</h1>
-            <p>An agent swarm that plans, delegates, validates, and synthesizes — live.</p>
-          </div>
-        </div>
+        <MurmurBrand tagline="Live agent swarm orchestration" />
         <div className="murmur-header-actions">
           <SystemStatus />
           <BillingControls plan={plan} />
-          <a className="murmur-gh" href="https://github.com/mightbeanshuu/murmur" target="_blank" rel="noreferrer">
-            Agent Swarms · Microsoft Build AI 2026
+          <a
+            aria-label="View Murmur source on GitHub"
+            className="murmur-icon-link"
+            href="https://github.com/mightbeanshuu/murmur"
+            target="_blank"
+            rel="noreferrer"
+          >
+            <GitHubIcon size={17} />
+            <span>Source</span>
           </a>
           <UserMenu name={session.user.name} email={session.user.email} />
         </div>
@@ -41,10 +44,14 @@ export default async function Home({
 
       {query.billing === "success" ? (
         <div className="murmur-billing-notice is-success">
-          Payment received. Pro activates as soon as Stripe confirms the subscription.
+          <CheckIcon size={16} />
+          <span>Payment received. Pro activates as soon as Stripe confirms the subscription.</span>
         </div>
       ) : query.billing === "cancelled" ? (
-        <div className="murmur-billing-notice">Checkout cancelled — your plan was not changed.</div>
+        <div className="murmur-billing-notice">
+          <WarningIcon size={16} />
+          <span>Checkout cancelled. Your plan was not changed.</span>
+        </div>
       ) : null}
 
       <GoalBar />

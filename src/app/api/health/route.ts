@@ -19,7 +19,11 @@ export async function GET() {
       executionMode,
       checkedAt: new Date(health.checkedAt).toISOString(),
       dependencies: {
-        kafka: { ok: health.kafka.ok, latencyMs: health.kafka.latencyMs },
+        kafka: {
+          ok: health.kafka.ok,
+          required: health.kafka.required,
+          latencyMs: health.kafka.latencyMs,
+        },
         redis: { ok: health.redis.ok, latencyMs: health.redis.latencyMs },
         postgres,
         temporal,

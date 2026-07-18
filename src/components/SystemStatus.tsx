@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { CheckIcon, ChevronDownIcon, RadioIcon, WarningIcon } from "./ui/Icons";
 
 interface HealthResponse {
   status: "ready" | "not_ready";
   executionMode: "direct" | "temporal";
-  dependencies: Record<string, { ok: boolean }>;
+  dependencies: Record<string, { ok: boolean; required?: boolean }>;
 }
 
 export function SystemStatus() {
@@ -22,12 +23,36 @@ export function SystemStatus() {
 
   const ready = health?.status === "ready";
   const mode = health?.executionMode ?? "temporal";
+  const kafkaActive = health?.dependencies.kafka?.ok;
+  const dependencyLabels: Record<string, string> = {
+    postgres: "PostgreSQL",
+    redis: "Redis",
+    kafka: "Kafka telemetry",
+    temporal: "Temporal",
+  };
 
   return (
-    <div className="murmur-system" title={ready ? "All required services are ready" : "Checking services"}>
-      <span className={`murmur-system-dot${ready ? " is-ready" : ""}`} />
-      <span>{mode === "temporal" ? "Temporal durable" : "Direct execution"}</span>
-      <span>Go telemetry</span>
-    </div>
+    <details className="murmur-system">
+      <summary title={ready ? "All required services are ready" : "Check infrastructure status"}>
+        <span className={`murmur-system-dot${ready ? " is-ready" : ""}`} />
+        <span>{health ? (ready ? "Systems ready" : "Limited mode") : "Checking systems"}</span>
+        <ChevronDownIcon size={14} />
+      </summary>
+      <div className="murmur-popover murmur-system-popover">
+        <div className="murmur-popover-head">
+          <span><RadioIcon size={15} />Infrastructure</span>
+          <strong>{mode === "temporal" ? "Durable" : "Direct"}</strong>
+        </div>
+        <ul>
+          {health ? Object.entries(health.dependencies).map(([key, dependency]) => (
+            <li key={key}>
+              {dependency.ok ? <CheckIcon size={15} /> : <WarningIcon size={15} />}
+              <span>{dependencyLabels[key] ?? key}</span>
+              <small>{key === "kafka" && !kafkaActive ? "Optional" : dependency.ok ? "Ready" : "Unavailable"}</small>
+            </li>
+          )) : <li><span className="murmur-button-loader" />Checking dependencies…</li>}
+        </ul>
+      </div>
+    </details>
   );
 }

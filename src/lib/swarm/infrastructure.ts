@@ -1,4 +1,9 @@
-import { getInfrastructureHealthCacheMs, InfrastructureConfigError } from "./config";
+import {
+  getInfrastructureHealthCacheMs,
+  InfrastructureConfigError,
+  isKafkaConfigured,
+  isKafkaRequired,
+} from "./config";
 import { pingKafka } from "./kafka";
 import { pingRedis } from "./redis";
 
@@ -11,13 +16,13 @@ export interface DependencyHealth {
 export interface InfrastructureHealth {
   ok: boolean;
   checkedAt: number;
-  kafka: DependencyHealth;
+  kafka: DependencyHealth & { required: boolean };
   redis: DependencyHealth;
 }
 
 export class InfrastructureUnavailableError extends Error {
   constructor(readonly health: InfrastructureHealth) {
-    super("Required Kafka or Redis infrastructure is unavailable.");
+    super("Required swarm infrastructure is unavailable.");
     this.name = "InfrastructureUnavailableError";
   }
 }
@@ -42,12 +47,22 @@ export async function getInfrastructureHealth(options: { force?: boolean } = {})
   // Share an active probe even when a caller asks to bypass the cached result.
   if (inFlight) return inFlight;
 
-  inFlight = Promise.all([checkDependency(pingKafka), checkDependency(pingRedis)])
+  const kafkaRequired = isKafkaRequired();
+  const kafkaProbe =
+    kafkaRequired || isKafkaConfigured()
+      ? checkDependency(pingKafka)
+      : Promise.resolve<DependencyHealth>({
+          ok: false,
+          latencyMs: 0,
+          error: "Kafka telemetry is disabled for this deployment.",
+        });
+
+  inFlight = Promise.all([kafkaProbe, checkDependency(pingRedis)])
     .then(([kafka, redis]) => {
       const value: InfrastructureHealth = {
-        ok: kafka.ok && redis.ok,
+        ok: redis.ok && (!kafkaRequired || kafka.ok),
         checkedAt: Date.now(),
-        kafka,
+        kafka: { ...kafka, required: kafkaRequired },
         redis,
       };
       cached = { expiresAt: Date.now() + getInfrastructureHealthCacheMs(), value };

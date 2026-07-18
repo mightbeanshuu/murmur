@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { BillingPlan } from "@/lib/billing/plans";
+import { CreditCardIcon } from "./ui/Icons";
 
 export function BillingControls({ plan }: { plan: BillingPlan }) {
   const [loading, setLoading] = useState(false);
@@ -24,12 +25,18 @@ export function BillingControls({ plan }: { plan: BillingPlan }) {
 
   return (
     <div className="murmur-billing">
-      <span className={`murmur-plan is-${plan}`}>{plan}</span>
-      <span className="murmur-plan-copy">{plan === "pro" ? "100 runs/hr" : "10 runs/hr"}</span>
-      <button onClick={openBilling} disabled={loading}>
-        {loading ? "Opening…" : plan === "pro" ? "Manage billing" : "Upgrade to Pro"}
+      <button
+        className={`murmur-billing-button is-${plan}`}
+        onClick={openBilling}
+        disabled={loading}
+        aria-label={plan === "pro" ? "Manage Pro billing" : "Upgrade to Murmur Pro"}
+      >
+        <CreditCardIcon size={16} />
+        <span className="murmur-plan">{plan === "pro" ? "Pro" : "Free"}</span>
+        <span className="murmur-plan-copy">{plan === "pro" ? "100 runs/hr" : "10 runs/hr"}</span>
+        <strong>{loading ? "Opening…" : plan === "pro" ? "Manage" : "Upgrade"}</strong>
       </button>
-      {error ? <span className="murmur-billing-error" title={error}>Billing unavailable</span> : null}
+      {error ? <span className="murmur-billing-error" role="status">{error}</span> : null}
     </div>
   );
 }

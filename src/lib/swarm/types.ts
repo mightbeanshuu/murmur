@@ -53,12 +53,12 @@ export type SwarmEvent =
   | { kind: "run.done"; final: string; tokensIn: number; tokensOut: number; ms: number }
   | { kind: "error"; message: string; agentId?: string };
 
-export const AGENT_META: Record<AgentType, { label: string; color: string; emoji: string }> = {
-  planner: { label: "Planner", color: "#a78bfa", emoji: "🧭" },
-  researcher: { label: "Researcher", color: "#38bdf8", emoji: "🔎" },
-  analyst: { label: "Analyst", color: "#34d399", emoji: "📊" },
-  writer: { label: "Writer", color: "#fbbf24", emoji: "✍️" },
-  coder: { label: "Coder", color: "#f472b6", emoji: "⚙️" },
-  validator: { label: "Validator", color: "#fb7185", emoji: "🛡️" },
-  synthesizer: { label: "Synthesizer", color: "#c084fc", emoji: "🧬" },
+export const AGENT_META: Record<AgentType, { label: string; color: string }> = {
+  planner: { label: "Planner", color: "#a78bfa" },
+  researcher: { label: "Researcher", color: "#38bdf8" },
+  analyst: { label: "Analyst", color: "#34d399" },
+  writer: { label: "Writer", color: "#fbbf24" },
+  coder: { label: "Coder", color: "#f472b6" },
+  validator: { label: "Validator", color: "#fb7185" },
+  synthesizer: { label: "Synthesizer", color: "#c084fc" },
 };

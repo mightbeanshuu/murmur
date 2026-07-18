@@ -2,6 +2,8 @@
 
 import { Handle, Position, type NodeProps } from "reactflow";
 import { AGENT_META, type AgentStatus, type AgentType } from "@/lib/swarm/types";
+import type { CSSProperties } from "react";
+import { AgentIcon } from "./ui/Icons";
 
 export interface FlowNodeData {
   agentType: AgentType;
@@ -40,25 +42,16 @@ export function AgentFlowNode({ data }: NodeProps<FlowNodeData>) {
   const live = active(data.status);
   return (
     <div
-      className="murmur-node"
-      style={{
-        borderColor: data.selected ? meta.color : "rgba(255,255,255,0.08)",
-        boxShadow: live
-          ? `0 0 0 1px ${meta.color}55, 0 0 24px ${meta.color}33`
-          : data.selected
-            ? `0 0 0 1px ${meta.color}aa`
-            : "0 1px 2px rgba(0,0,0,0.4)",
-      }}
+      className={`murmur-node${live ? " is-live" : ""}${data.selected ? " is-selected" : ""}`}
+      style={{ "--agent-color": meta.color } as CSSProperties}
     >
       <Handle type="target" position={Position.Top} className="murmur-handle" />
       <div className="murmur-node-head">
-        <span className="murmur-emoji" style={{ background: `${meta.color}22` }}>
-          {meta.emoji}
+        <span className="murmur-agent-glyph">
+          <AgentIcon type={data.agentType} size={16} />
         </span>
         <div className="murmur-node-titles">
-          <span className="murmur-node-type" style={{ color: meta.color }}>
-            {meta.label}
-          </span>
+          <span className="murmur-node-type">{meta.label}</span>
           <span className="murmur-node-title">{data.title}</span>
         </div>
         {data.score != null && (
@@ -73,7 +66,6 @@ export function AgentFlowNode({ data }: NodeProps<FlowNodeData>) {
           className="murmur-dot"
           style={{
             background: STATUS_DOT[data.status],
-            animation: live ? "murmur-pulse 1.1s ease-in-out infinite" : "none",
           }}
         />
         {STATUS_LABEL[data.status]}

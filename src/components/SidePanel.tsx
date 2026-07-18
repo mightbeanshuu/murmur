@@ -3,6 +3,7 @@
 import { useSwarm } from "@/lib/store";
 import { AGENT_META } from "@/lib/swarm/types";
 import { Markdown } from "./Markdown";
+import { AgentIcon, SparklesIcon, WarningIcon } from "./ui/Icons";
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
@@ -19,13 +20,13 @@ export function SidePanel() {
 
   return (
     <aside className="murmur-side">
-      {error && <div className="murmur-error">⚠ {error}</div>}
+      {error && <div className="murmur-error" role="alert"><WarningIcon size={17} /><span>{error}</span></div>}
 
       {agent ? (
         <>
           <div className="murmur-side-head">
-            <span style={{ color: AGENT_META[agent.agentType].color }}>
-              {AGENT_META[agent.agentType].emoji} {AGENT_META[agent.agentType].label}
+            <span style={{ color: AGENT_META[agent.agentType].color }} className="murmur-side-label">
+              <AgentIcon type={agent.agentType} size={15} /> {AGENT_META[agent.agentType].label}
             </span>
             <h3>{agent.title}</h3>
             {agent.score != null && (
@@ -36,14 +37,20 @@ export function SidePanel() {
             )}
           </div>
           <div className="murmur-scroll">
-            {agent.output ? <Markdown>{agent.output}</Markdown> : <p className="murmur-muted">Waiting for output…</p>}
+            {agent.output ? <Markdown>{agent.output}</Markdown> : (
+              <div className="murmur-empty-output">
+                <span><AgentIcon type={agent.agentType} size={20} /></span>
+                <p>Waiting for this agent&apos;s first output…</p>
+              </div>
+            )}
           </div>
         </>
       ) : (
         <>
           <div className="murmur-side-head">
-            <span className="murmur-kicker">
-              {runStatus === "running" ? "Swarm is working…" : runStatus === "done" ? "Final deliverable" : "Plan"}
+            <span className="murmur-side-label">
+              <SparklesIcon size={15} />
+              {runStatus === "running" ? "Swarm in progress" : runStatus === "done" ? "Final deliverable" : "Run briefing"}
             </span>
             {planSummary && <h3>{planSummary}</h3>}
           </div>
@@ -65,11 +72,14 @@ export function SidePanel() {
                 {planThinking && <p className="murmur-plan-think">{planThinking}</p>}
               </div>
             ) : (
-              <p className="murmur-muted">
-                Give the swarm a goal. The planner will decompose it into a DAG of specialist
-                agents that run in parallel, validate each other&apos;s work, and synthesize a final
-                answer. Click any node to watch it think.
-              </p>
+              <div className="murmur-empty-output">
+                <span><SparklesIcon size={20} /></span>
+                <h4>Your result will land here</h4>
+                <p>
+                  Deploy a goal to generate a task graph. Select any node to inspect its live work,
+                  or stay here for the synthesized deliverable.
+                </p>
+              </div>
             )}
           </div>
         </>

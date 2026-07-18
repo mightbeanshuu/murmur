@@ -1,6 +1,7 @@
 import type { SwarmEvent } from "./types";
 import { publishSwarmEvent } from "./kafka";
 import { finishRunSession, persistRunEvent, type RunStatus, type SwarmEventEnvelope } from "./session";
+import { isKafkaConfigured, isKafkaRequired } from "./config";
 
 /**
  * Async event queue that lets many parallel agents push events while a single
@@ -90,7 +91,15 @@ export class EventBus implements AsyncIterable<SwarmEvent> {
       // A retried Temporal Activity can replay an already-stored sequence.
       // Skip Kafka too, otherwise Redis would be idempotent while consumers
       // still received a duplicate event.
-      if (persisted) await publishSwarmEvent(envelope);
+      if (persisted && (isKafkaRequired() || isKafkaConfigured())) {
+        try {
+          await publishSwarmEvent(envelope);
+        } catch (error) {
+          if (isKafkaRequired()) throw error;
+          // Redis remains the recoverable source in optional telemetry mode.
+          console.error("Optional Kafka event delivery failed", error);
+        }
+      }
     } catch (error) {
       this.deliveryFailure ??= error;
       console.error("Failed to deliver swarm event", error);

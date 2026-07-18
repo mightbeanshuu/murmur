@@ -36,14 +36,14 @@ export async function POST(req: Request) {
   }
 
   try {
-    // Kafka and Redis are part of the run contract. Reject new work before any
-    // model tokens are spent when either dependency or the Kafka topic is down.
+    // Redis is always part of the run contract. Kafka is also required unless
+    // this deployment explicitly opts into Redis-only telemetry mode.
     await assertInfrastructureReady();
   } catch (error) {
     const health = error instanceof InfrastructureUnavailableError ? error.health : undefined;
     return new Response(
       JSON.stringify({
-        error: "Required Kafka/Redis infrastructure is unavailable.",
+        error: "Required swarm infrastructure is unavailable.",
         dependencies: health
           ? { kafka: health.kafka.ok ? "up" : "down", redis: health.redis.ok ? "up" : "down" }
           : undefined,

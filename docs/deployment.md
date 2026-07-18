@@ -4,9 +4,16 @@
 
 - Set `OPENROUTER_API_KEY`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, and `APP_URL`.
 - Set managed `DATABASE_URL`, `REDIS_URL`, and Kafka TLS/SASL variables.
-- Set `MURMUR_EXECUTION_MODE=temporal` and the reachable Temporal address/namespace/task queue.
+- If no managed Kafka service is available for a demo, set
+  `MURMUR_KAFKA_REQUIRED=0`. This preserves Redis durability but disables the Go
+  telemetry stream; production/full deployments should keep the default `1`.
+- Use `MURMUR_EXECUTION_MODE=direct` only for a constrained Vercel showcase. For durable
+  production execution, set it to `temporal` and configure the reachable Temporal
+  address/namespace/task queue plus the always-on Worker below.
 - Set `STRIPE_SECRET_KEY`, `STRIPE_PRO_PRICE_ID`, and `STRIPE_WEBHOOK_SECRET`.
-- Run `pnpm db:migrate` before shifting traffic.
+- Production builds validate required URLs/secrets, then run the idempotent
+  `pnpm db:migrate` release step under a PostgreSQL advisory lock before
+  `next build`. Preview builds skip Production migrations.
 
 ## Background services
 

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useSwarm } from "@/lib/store";
 import { deleteRun, listRuns, seedOnce, type SavedRun } from "@/lib/history";
 import { SAMPLE_RUN } from "@/lib/sampleRun";
+import { ClockIcon, LayersIcon, TrashIcon } from "./ui/Icons";
 
 function ago(ts: number): string {
   const s = Math.max(1, Math.round((Date.now() - ts) / 1000));
@@ -22,7 +23,7 @@ export function RecentRuns() {
   });
   const loadRun = useSwarm((s) => s.loadRun);
   const runStatus = useSwarm((s) => s.runStatus);
-  const goal = useSwarm((s) => s.goal);
+  const runId = useSwarm((s) => s.runId);
 
   const refresh = useCallback(() => setRuns(listRuns()), []);
 
@@ -36,45 +37,41 @@ export function RecentRuns() {
   return (
     <aside className="murmur-runs">
       <div className="murmur-runs-head">
-        <span>Recent runs</span>
+        <span><ClockIcon size={15} />Recent runs</span>
         <span className="murmur-runs-count">{runs.length}</span>
       </div>
-      <div className="murmur-runs-list">
-        {runs.length === 0 && <p className="murmur-runs-empty">No runs yet. Deploy a swarm →</p>}
+      <ul className="murmur-runs-list">
+        {runs.length === 0 && <li className="murmur-runs-empty">No runs yet. Deploy a swarm →</li>}
         {runs.map((r) => {
-          const active = runStatus === "done" && r.goal === goal;
+          const active = runStatus === "done" && r.id === runId;
           const workers = r.agents.filter(
             (a) => a.agentType !== "planner" && a.agentType !== "validator",
           ).length;
           return (
-            <button
-              key={r.id}
-              className={`murmur-run-item${active ? " is-active" : ""}`}
-              onClick={() => loadRun(r)}
-              title={r.goal}
-            >
-              <span className="murmur-run-goal">{r.goal}</span>
-              <span className="murmur-run-meta">
-                {ago(r.at)} · {workers} agents
-                {r.stats ? ` · ${(r.stats.ms / 1000).toFixed(0)}s` : ""}
-              </span>
-              <span
+            <li key={r.id} className={`murmur-run-item${active ? " is-active" : ""}`}>
+              <button className="murmur-run-main" onClick={() => loadRun(r)} title={r.goal}>
+                <span className="murmur-run-goal">{r.goal}</span>
+                <span className="murmur-run-meta">
+                  <ClockIcon size={12} />{ago(r.at)}
+                  <LayersIcon size={12} />{workers} agents
+                  {r.stats ? <span>{(r.stats.ms / 1000).toFixed(0)}s</span> : null}
+                </span>
+              </button>
+              <button
+                aria-label={`Delete run: ${r.goal}`}
                 className="murmur-run-del"
-                role="button"
-                tabIndex={-1}
-                title="Delete"
-                onClick={(e) => {
-                  e.stopPropagation();
+                title="Delete run"
+                onClick={() => {
                   deleteRun(r.id);
                   refresh();
                 }}
               >
-                ✕
-              </span>
-            </button>
+                <TrashIcon size={14} />
+              </button>
+            </li>
           );
         })}
-      </div>
+      </ul>
     </aside>
   );
 }
