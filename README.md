@@ -5,6 +5,10 @@
 <p align="center"><strong>Turn one complex goal into a live, durable, validated agent swarm.</strong></p>
 <p align="center">Plan · Delegate · Execute · Validate · Synthesize</p>
 
+<p align="center">
+  <img src="social-assets/murmur-iphone-loop-4x5.gif" width="480" alt="Murmur live agent swarm product walkthrough" />
+</p>
+
 Murmur is a production-oriented orchestration workspace and an inspectable engineering portfolio project. A planner creates a task DAG, workers execute ready tasks in parallel, mode-aware validation can request focused revisions, and a synthesizer produces the final answer while React Flow renders every event.
 
 The system pairs a focused product experience with production-grade identity, billing, durable workflows, streaming state, distributed infrastructure, and observability.
