@@ -9,11 +9,13 @@ export interface SwarmEventEnvelope {
   runId: string;
   sequence: number;
   occurredAt: number;
+  ownerId: string;
   event: SwarmEvent;
 }
 
 export interface RunSession {
   runId: string;
+  ownerId: string;
   status: RunStatus;
   goal?: string;
   startedAt?: number;
@@ -68,6 +70,8 @@ export async function persistRunEvent(envelope: SwarmEventEnvelope) {
   const fields: string[] = [
     "runId",
     envelope.runId,
+    "ownerId",
+    envelope.ownerId,
     "status",
     "running",
     "eventCount",
@@ -86,7 +90,7 @@ export async function persistRunEvent(envelope: SwarmEventEnvelope) {
     fields.push("lastError", envelope.event.message);
   }
 
-  await redis.eval(
+  const persisted = await redis.eval(
     PERSIST_EVENT,
     2,
     session,
@@ -98,6 +102,34 @@ export async function persistRunEvent(envelope: SwarmEventEnvelope) {
     JSON.stringify(envelope),
     ...fields,
   );
+  return persisted === 1;
+}
+
+/** Creates the ownership record before a Temporal worker picks up the run. */
+export async function createRunSession(runId: string, ownerId: string, goal: string) {
+  const redis = await getRedis();
+  const now = String(Date.now());
+  await redis
+    .multi()
+    .hset(
+      sessionKey(runId),
+      "runId",
+      runId,
+      "ownerId",
+      ownerId,
+      "goal",
+      goal,
+      "status",
+      "running",
+      "eventCount",
+      "0",
+      "startedAt",
+      now,
+      "updatedAt",
+      now,
+    )
+    .expire(sessionKey(runId), SESSION_TTL_SECONDS)
+    .exec();
 }
 
 export async function finishRunSession(runId: string, status: Exclude<RunStatus, "running">) {
@@ -119,6 +151,7 @@ export async function getRunSession(runId: string): Promise<RunSession | null> {
   if (!data.runId) return null;
   return {
     runId: data.runId,
+    ownerId: data.ownerId,
     status: (data.status as RunStatus) ?? "running",
     goal: data.goal,
     startedAt: numberOrUndefined(data.startedAt),
@@ -137,6 +170,26 @@ export async function getRunEvents(runId: string, count = 1_000): Promise<SwarmE
     const index = values.indexOf("envelope");
     if (index < 0) return [];
     const value = values[index + 1];
+    if (!value) return [];
+    try {
+      return [JSON.parse(value) as SwarmEventEnvelope];
+    } catch {
+      return [];
+    }
+  });
+}
+
+export async function getRunEventsAfter(
+  runId: string,
+  sequence: number,
+  count = 200,
+): Promise<SwarmEventEnvelope[]> {
+  const redis = await getRedis();
+  const start = sequence > 0 ? `(${sequence}-0` : "-";
+  const entries = await redis.xrange(eventStreamKey(runId), start, "+", "COUNT", count);
+  return entries.flatMap(([, values]) => {
+    const index = values.indexOf("envelope");
+    const value = index >= 0 ? values[index + 1] : undefined;
     if (!value) return [];
     try {
       return [JSON.parse(value) as SwarmEventEnvelope];

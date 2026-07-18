@@ -2094,3 +2094,528 @@ The canonical, code-verified placement guide is `Murmur_Placement_Handbook.md` a
 Interview wording to memorise:
 
 > Murmur deeply uses Redis for distributed quotas and recoverable run state. It publishes every run event to Kafka with per-run partition ordering, but the repository currently demonstrates only the producer side. The next correctness step is a transactional outbox, idempotent consumer, durable worker, and replay/cancellation UI.
+
+---
+
+# API key, OpenRouter client, AI SDK, and Murmur agent-call flow
+
+This is the current working mental model for how Murmur gets actual AI replies.
+
+## 1. Full Murmur request path
+
+```text
+1. User types goal in browser.
+
+2. Browser sends:
+   POST /api/swarm
+   body: { goal: "..." }
+
+3. Next.js route receives it.
+
+4. Route checks:
+   - Is goal valid?
+   - Is OPENROUTER_API_KEY set?
+   - Are Kafka and Redis ready?
+   - Is user rate-limited?
+
+5. Backend creates runId and EventBus.
+
+6. Backend starts runSwarm(goal, bus).
+
+7. Planner runs first:
+   - chooses model chain
+   - calls OpenRouter through AI SDK
+   - receives structured plan
+   - Zod validates the plan
+
+8. Orchestrator reads the plan:
+   - builds DAG
+   - finds ready tasks
+   - runs workers in waves
+
+9. Worker runs:
+   - calls model through AI SDK
+   - receives text stream
+   - each chunk emits UI event
+
+10. Validator runs:
+    - calls model through AI SDK
+    - receives structured score/feedback
+    - accepts or asks worker to revise once
+
+11. Synthesizer runs:
+    - calls model through AI SDK
+    - combines all outputs into final answer
+
+12. EventBus sends events to browser as SSE.
+
+13. Browser updates React Flow graph live.
+```
+
+## 2. Key distinction
+
+The planner, worker, validator, and synthesizer are not separate servers. They are code roles inside the backend.
+
+They become "agents" because each role has:
+
+- its own system prompt;
+- its own job;
+- its own selected model chain;
+- its own input/output shape;
+- orchestration rules around when it runs.
+
+Role meanings:
+
+```text
+Planner:
+  "Turn goal into task graph."
+
+Worker:
+  "Solve one assigned task."
+
+Validator:
+  "Judge worker output."
+
+Synthesizer:
+  "Combine everything into final answer."
+```
+
+## 3. Why they call the AI model
+
+Their intelligence comes from the LLM.
+
+```text
+TypeScript = manager / traffic controller
+AI model = brain doing language reasoning
+Zod = strict checker
+Redis/Kafka = production infrastructure
+SSE = live UI pipe
+```
+
+The TypeScript code controls when each role runs, what context it receives, what output shape is expected, and what happens if it fails. The model provides the reasoning/text/structured decision.
+
+## 4. How the backend creates the OpenRouter model client
+
+Current source:
+
+```ts
+const openrouter = createOpenRouter({ apiKey: process.env.OPENROUTER_API_KEY });
+export const model = (id: string) => openrouter(id);
+```
+
+Meaning:
+
+```text
+createOpenRouter({ apiKey })
+  = create an OpenRouter provider client using the server-side API key.
+
+model(id)
+  = create a model reference for one exact OpenRouter model id.
+```
+
+Important: this does not call the AI yet. It prepares a model object that the AI SDK can use later.
+
+## 5. API key vs model ID vs system prompt
+
+```text
+API key = permission
+model ID = which brain to use
+system prompt = what role/instructions that brain should follow
+user prompt = the task/context to solve
+AI SDK = helper library that sends the request and returns the result
+```
+
+The API key itself does not generate a reply. It only proves the backend is allowed to call OpenRouter. The actual reply comes from the selected model.
+
+## 6. Dynamic model selection
+
+The backend creates the OpenRouter provider once, but chooses model IDs dynamically:
+
+```ts
+chainFor(role)
+```
+
+Current role-level idea:
+
+```text
+planner      -> paid Claude first if available, then free structured models
+validator    -> paid Claude first if available, then free structured models
+worker       -> free chat models for cost control
+synthesizer  -> paid/free chain depending config
+```
+
+This means a configured `OPENROUTER_API_KEY` proves provider access, not that a specific model such as Grok handled the request. This repository currently uses OpenRouter via `OPENROUTER_API_KEY`; it does not use a direct `GROK_API_KEY`/`XAI_API_KEY` integration unless that is added later.
+
+## 7. What the AI SDK does
+
+An SDK is a helper library. Without the SDK, the backend would manually call OpenRouter with `fetch`, headers, JSON body, streaming parsing, schema parsing, and error handling.
+
+Conceptual raw request:
+
+```http
+POST https://openrouter.ai/api/v1/chat/completions
+Authorization: Bearer OPENROUTER_API_KEY
+Content-Type: application/json
+```
+
+Conceptual body:
+
+```json
+{
+  "model": "anthropic/claude-sonnet-4.5",
+  "messages": [
+    { "role": "system", "content": "You are a planner..." },
+    { "role": "user", "content": "Break this goal into tasks..." }
+  ]
+}
+```
+
+With the AI SDK, Murmur writes higher-level calls instead:
+
+```ts
+streamText({ model: model(id), system, prompt });
+streamObject({ model: model(id), schema, system, prompt });
+generateObject({ model: model(id), schema, system, prompt });
+```
+
+## 8. Why different roles use different AI SDK calls
+
+```text
+planner:
+  needs a machine-readable task graph
+  -> uses structured object generation
+  -> Zod validates the object
+
+worker:
+  needs human-readable text
+  -> uses streaming text
+  -> every delta can be shown live in the UI
+
+validator:
+  needs a machine-readable score/approval/feedback object
+  -> uses structured object generation
+  -> Zod validates the judgment
+
+synthesizer:
+  needs final human-readable answer
+  -> uses streaming text
+```
+
+## 9. Interview-ready answer
+
+Murmur uses OpenRouter through the Vercel AI SDK. The backend creates an OpenRouter provider client using `OPENROUTER_API_KEY`, then wraps model selection with a `model(id)` helper. Each role asks `chainFor(role)` for an ordered model fallback chain. Planner and validator use structured object generation with Zod schemas because their outputs must be machine-readable. Workers and synthesizer use streaming text because their output is human-readable and should appear live in the UI. The AI SDK converts those calls into authenticated OpenRouter requests, streams or parses the response, and returns it to the orchestration layer.
+
+## 10. Current checkpoint
+
+Explain in your own words:
+
+```text
+What is the difference between:
+1. API key
+2. model ID
+3. system prompt
+4. user prompt
+5. AI SDK
+```
+
+---
+
+# What is left to learn in Murmur
+
+Current status: the foundation is mostly complete. The remaining work is not "what is Murmur?" anymore. It is understanding the remaining project internals, production gaps, deployment, and interview delivery.
+
+## Already covered enough to revise, not restart
+
+```text
+Swarm roles              planner / workers / validator / synthesizer
+DAG execution            dependencies, waves, parallel tasks
+Shared blackboard        upstream task outputs passed downstream
+AI provider flow         OPENROUTER_API_KEY, OpenRouter, model IDs, AI SDK
+Zod basics               runtime schemas for LLM structured output
+SSE basics/deep dive     ReadableStream, data: ...\n\n, buffering, JSON.parse
+Frontend event flow      useRunSwarm -> Zustand apply -> React Flow rerender
+Redis basics             rate limits, Lua, session projection, stream replay route
+Docker/Compose basics    local Kafka/Redis services and health checks
+Testing basics           Vitest DAG tests and Redis integration tests
+Reliability audit        fallback fix, cancellation propagation, Redis retry backoff
+Interview framing        attack/counter/upgrade structure
+```
+
+## Main topics still left
+
+### 1. HTTP/networking fundamentals through Murmur
+
+Need to master:
+
+```text
+HTTP method        GET vs POST
+URL                /api/swarm vs /api/swarm/[runId] vs /api/health
+headers            content-type, retry-after, x-murmur-run-id
+body               JSON request/response payload
+status codes       200, 400, 429, 500, 503
+normal response    one JSON response and close
+stream response    long-lived SSE response
+```
+
+Why it matters: this explains how browser and backend communicate, and why `req.json()`, `Response`, `fetch`, and SSE exist.
+
+Next concrete lesson: trace all three route handlers:
+
+```text
+POST /api/swarm          start a live run
+GET /api/swarm/[runId]   fetch persisted run/events
+GET /api/health          check Kafka/Redis readiness
+```
+
+### 2. Next.js App Router and server/client boundary
+
+Need to master:
+
+```text
+src/app/page.tsx              page route
+src/app/api/.../route.ts      API route handlers
+"use client"                  browser-side React code
+server component default      safe place for server-rendered UI
+route handler                 backend code inside Next.js
+environment variables         server-only secrets/config
+```
+
+Key interview point: browser code must never receive `OPENROUTER_API_KEY`, `REDIS_URL`, or Kafka credentials.
+
+### 3. TypeScript line-by-line confidence
+
+Already covered concepts, but still needs repetition:
+
+```text
+type vs interface
+union types
+discriminated unions
+Record<K,V>
+Map<K,V>
+async Promise<T>
+unknown in catch
+type assertions like "as SwarmEvent"
+runtime validation vs compile-time types
+```
+
+Concrete files to revisit:
+
+```text
+src/lib/swarm/types.ts
+src/lib/store.ts
+src/lib/useRunSwarm.ts
+src/lib/swarm/orchestrator.ts
+```
+
+### 4. Kafka deep side: consumer, offsets, lag
+
+Producer side is mostly covered. Still left:
+
+```text
+consumer
+consumer group
+offset
+lag
+replay from Kafka
+partition assignment
+what an analytics/audit consumer would do
+why Kafka currently has no consumer in this repo
+```
+
+Interview answer to learn: Murmur currently publishes to Kafka for distributed event streaming/audit readiness, but does not yet consume from Kafka. Redis is the current replay/read path.
+
+### 5. Redis advanced revision
+
+Already covered Redis well, but still worth drilling:
+
+```text
+fixed window vs sliding window vs token bucket
+Lua atomicity
+INCR + EXPIRE TTL behavior
+Redis hash vs Redis stream
+idempotent event persistence
+stale sequence vs exact replay
+Redis outage behavior
+```
+
+Concrete files:
+
+```text
+src/lib/swarm/rateLimit.ts
+src/lib/swarm/session.ts
+src/lib/swarm/redis.ts
+src/lib/swarm/redis.integration.test.ts
+```
+
+### 6. Reliable orchestration architecture
+
+Partially started, still left to finish deeply:
+
+```text
+in-request orchestration limitation
+durable workflow state
+background job queue
+BullMQ vs Temporal vs Inngest
+transactional outbox
+dead-letter queue
+backpressure
+idempotency at workflow level
+crash recovery
+resume/retry policy
+```
+
+Current honest project gap: Redis stores recoverable run history, but the workflow itself is not fully durable/resumable if the process dies mid-run.
+
+### 7. Observability, cost, and security
+
+Still mostly left:
+
+```text
+structured logs with runId
+metrics: request count, error rate, duration
+traces across planner/workers/validator/synthesizer
+Kafka lag alerts
+Redis memory/latency alerts
+token/cost accounting
+provider usage vs length/4 estimate
+auth and per-user quota
+prompt injection boundaries
+secret rotation
+input size limits
+abuse protection
+```
+
+Interview angle: current project has readiness checks and tests, but not a full observability/security stack.
+
+### 8. Production deployment
+
+Still left / partially blocked:
+
+```text
+managed Kafka setup        Redpanda/Confluent/Aiven
+managed Redis setup        Redis Cloud/Upstash/etc.
+production env vars        KAFKA_BROKERS, REDIS_URL, SASL/TLS
+Vercel runtime limits      long SSE request constraints
+container deployment       safer for long-running swarm jobs
+Docker image runtime       standalone Next server
+health checks              /api/health 200 before traffic
+rollback/backups           production operations
+```
+
+Important known blocker: production cannot use local Docker addresses like `localhost:9092`, `kafka:19092`, or `redis:6379` from Vercel.
+
+### 9. Frontend/UI internals
+
+Still worth revisiting:
+
+```text
+GoalBar submit path
+useRunSwarm hook
+Zustand store reducer
+React Flow nodes/edges
+SidePanel output display
+RecentRuns and replay route usage
+loading/error/degraded states
+```
+
+Concrete files:
+
+```text
+src/components/GoalBar.tsx
+src/lib/useRunSwarm.ts
+src/lib/store.ts
+src/components/SwarmGraph.tsx
+src/components/SidePanel.tsx
+src/components/RecentRuns.tsx
+```
+
+### 10. Senior interview delivery
+
+Still needs practice, not more notes:
+
+```text
+30-second project intro
+2-minute architecture walkthrough
+explain one request end-to-end
+explain one failure end-to-end
+defend Redis/Kafka/SSE choices
+name current limitations honestly
+give prioritized upgrades
+mock interview under pressure
+resume bullets
+```
+
+## Recommended next learning order
+
+```text
+1. HTTP anatomy through the three route.ts files
+2. Full line-by-line trace of POST /api/swarm
+3. Full line-by-line trace of GET /api/swarm/[runId]
+4. Full line-by-line trace of useRunSwarm stream parsing
+5. TypeScript event types + Zustand reducer
+6. Kafka consumer/offset/lag lesson
+7. Reliable workflow architecture: BullMQ/Temporal/Inngest/outbox
+8. Observability/cost/security
+9. Production deployment choices
+10. Mock interview and resume polish
+```
+
+## Current checkpoint
+
+Explain from memory:
+
+```text
+Why does JSON.parse only prove valid JSON syntax, while Zod proves runtime shape?
+
+Why does Murmur use SSE instead of waiting for one final JSON response?
+
+Why does /api/swarm/[runId] exist if /api/swarm already starts the run?
+```
+
+## Architecture update — 18 July 2026
+
+Earlier notes that call auth, a Kafka consumer, and a durable workflow engine "future gaps" are now superseded:
+
+```text
+Next.js           page/API adapter, auth boundary, SSE
+Better Auth       sessions and identity
+PostgreSQL        users + Stripe entitlement projection
+Stripe            payment and subscription source of truth
+Temporal          durable dispatch to an external Worker
+Redis             run state, event replay, per-user quota
+Kafka             versioned downstream event stream
+Go                isolated telemetry consumer and Prometheus metrics
+```
+
+Free versus Pro:
+
+```text
+Free: 10 swarm runs per hour
+Pro:  100 swarm runs per hour
+
+Upgrade → backend creates Stripe Checkout Session
+Stripe event → signed webhook verifies raw body
+Webhook → PostgreSQL subscription upsert
+Next request → backend reads plan → Redis enforces matching quota
+Manage billing → authenticated backend creates Stripe Customer Portal Session
+```
+
+Important security distinction: the browser never receives the Stripe secret, OpenRouter key, Better Auth secret, or webhook secret. The browser receives only a short-lived Stripe-hosted URL.
+
+Temporal correction: Murmur now has durable workflow dispatch, but not full step-level recovery. `runSwarm` is one Activity and automatic retries are disabled because LLM side effects are not fully idempotent. Split planner, task waves, validation, and synthesis into checkpointed Activities before claiming exact mid-run resume.
+
+## What is left to learn now
+
+```text
+1. Auth cookies, session lookup, CSRF/origin protection, password reset/email verification
+2. Stripe Checkout vs Portal vs webhook; event retries and subscription states
+3. Temporal Workflow determinism, Activity heartbeats, cancellation, retries, idempotency
+4. Go consumer groups, offset commits, rebalance, lag, Prometheus scraping
+5. Production deployment: Vercel web + managed data services + container Workers
+6. Observability: structured logs, traces, dashboards, alerts, provider-reported LLM cost
+7. Reliability upgrades: phase Activities, transactional outbox, backpressure/DLQ
+8. Frontend revision: Zustand event projection and React Flow nodes/edges
+9. Interview practice: 30-second pitch, two-minute architecture, failure walkthrough
+```
+
+Best next lesson: follow one Stripe webhook from raw HTTP bytes → signature verification → subscription upsert → Pro quota, then compare that normal network side effect with why a Temporal Workflow must remain deterministic.

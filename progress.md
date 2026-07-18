@@ -215,3 +215,90 @@
   - Cancellation propagation: `src/app/api/swarm/route.ts` now passes `req.signal` into `runSwarm`; `orchestrator.ts` accepts `signal?: AbortSignal`, checks `signal?.aborted` at the top of each DAG wave and before synthesis (emits an error + `bus.close("failed")` and returns if aborted), and threads `signal` through `runWorker` (`worker.ts`), `validate` (`validator.ts`), `plan` (`planner.ts`), and the synthesis `runText` call. A client disconnecting mid-run now stops further model calls at the next checkpoint instead of continuing invisibly.
 - Verified: `pnpm exec tsc --noEmit` clean, `pnpm test` 15/15 passed (no test changes needed — behavior covered was orthogonal to the DAG/Redis integration tests), `pnpm lint` clean.
 - Did NOT implement (documented as legitimate future upgrades, not required for current scope): transactional outbox for Redis→Kafka, durable/resumable workflow state (BullMQ/Temporal/Inngest), EventBus backpressure bounding, dead-letter queue for repeatedly-failing tasks, real auth/multi-tenancy, observability (structured logs/metrics/traces), provider-reported token usage instead of length/4 estimate.
+
+## Session 17 — Reliable orchestration interview gauntlet (chat-only, no code)
+- User asked for a chat-only (no file edits) list of what a senior interviewer would challenge about Murmur's orchestration reliability specifically, with a counter-argument and named upgrade per point.
+- Produced a 10-item attack/counter/upgrade list covering: in-request orchestration crash resumption, durable-history-vs-durable-workflow distinction, cancellation propagation (verified as already fixed in Session 16, commits 885eee0/872cd1e), Redis/Kafka outbox gap, lateral-vs-vertical retry policy, dead-letter handling for repeatedly-failing tasks, EventBus backpressure, multi-instance SSE scaling, per-IP-only rate limiting/auth, and missing observability.
+- Framed the meta-strategy: name your own system's gaps unprompted with a prioritized roadmap, and cite the already-fixed items as proof of a working audit-and-fix loop.
+- No code changes this session — content was requested and delivered purely in chat, then logged to sessions.md/progress.md per user's explicit follow-up request.
+
+## Session 18 — API key / OpenRouter / AI SDK lesson stored
+- User asked for the next lesson and explicitly requested the full Murmur request path plus API-key/model-client/AI-SDK explanation to be stored in `imp notes.md` and reflected in `sessions.md`/`progress.md`.
+- Re-read tutor skill instructions for this teaching/tracking turn.
+- Re-checked current source behavior in:
+  - `src/lib/swarm/models.ts`
+  - `src/lib/swarm/run.ts`
+  - `src/app/api/swarm/route.ts`
+- Stored in `imp notes.md`:
+  - numbered full Murmur request path from browser `POST /api/swarm` to React Flow graph update;
+  - distinction that planner/worker/validator/synthesizer are backend code roles, not separate servers;
+  - mental model: TypeScript = traffic controller, AI model = reasoning brain, Zod = strict checker, Redis/Kafka = production infrastructure, SSE = live UI pipe;
+  - `createOpenRouter({ apiKey })` provider-client explanation;
+  - `model(id)` model-reference explanation;
+  - API key vs model ID vs system prompt vs user prompt vs AI SDK;
+  - conceptual raw OpenRouter HTTP request hidden by the SDK;
+  - why planner/validator use structured object generation while workers/synthesizer use streaming text;
+  - interview-ready answer and current checkpoint.
+- Updated `sessions.md` with Session 18 learning state, concepts taught, small terms, doubts/answers, learner gap, and next-session focus.
+- No source code or dependency changes were made; documentation/learning notes only.
+
+## Session 19 — Checkpoint + Next.js App Router boundary
+- User chose to do both pending lessons: API-key/model/prompt/SDK checkpoint and Next.js App Router/client-server boundary.
+- Re-read tutor skill instructions for the teaching turn.
+- Re-checked current files used in the lesson:
+  - `src/lib/useRunSwarm.ts`
+  - `src/app/page.tsx`
+  - `src/app/api/swarm/route.ts`
+  - `src/app/api/health/route.ts`
+- Lesson focus:
+  - API key = permission, model ID = selected AI brain, system prompt = role rules, user prompt = task, AI SDK = helper that sends/parses model requests.
+  - `src/app/page.tsx` renders the page shell and components.
+  - `src/lib/useRunSwarm.ts` is client-side because of `"use client"` and uses browser `fetch`.
+  - `src/app/api/swarm/route.ts` is server-side and safely reads `process.env.OPENROUTER_API_KEY`, checks Kafka/Redis, rate-limits, starts `runSwarm`, and returns SSE.
+  - `src/app/api/health/route.ts` is a server route for runtime readiness checks.
+- No source code/dependency changes; learning logs only.
+
+## Session 20 — SSE and JSON/Zod networking lesson
+- User requested an SSE deep dive with code and interview aspects, then clarification of what JSON parsing does compared with Zod validation for strict LLM schema replies and JSON over HTTP requests.
+- Re-read tutor skill instructions for the teaching turn.
+- Re-checked current files:
+  - `src/app/api/swarm/route.ts`
+  - `src/lib/useRunSwarm.ts`
+  - `src/lib/swarm/bus.ts`
+  - `src/lib/swarm/planner.ts`
+- Lesson focus:
+  - Server converts events to SSE text frames using `JSON.stringify(event)` and `TextEncoder`.
+  - Client reads byte chunks using `response.body.getReader()`, converts bytes to text with `TextDecoder`, buffers partial frames, splits on `\n\n`, strips the `data:` prefix, and uses `JSON.parse` to recover the event object.
+  - `req.json()` parses incoming HTTP JSON body from the browser; it does not validate business shape by itself.
+  - Zod validates structured LLM replies against runtime schemas, e.g. planner `planSchema`.
+  - Parsing answers "is this syntactically JSON?"; validation answers "does this object have the shape/rules my app needs?"
+- No source code/dependency changes; learning logs only.
+
+## Session 21 — Remaining learning roadmap documented
+- User asked to stop and clarify what is left in the project to learn, then update `sessions.md`, `progress.md`, and `imp notes.md`.
+- Added a new `imp notes.md` section: "What is left to learn in Murmur".
+- Covered remaining areas:
+  - HTTP/networking fundamentals through all three route handlers;
+  - Next.js App Router and client/server boundary;
+  - TypeScript line-by-line confidence;
+  - Kafka consumer/offset/lag gap;
+  - Redis advanced revision;
+  - reliable orchestration architecture and durable workflow gaps;
+  - observability, cost, and security;
+  - production deployment;
+  - frontend/UI internals;
+  - senior interview delivery and mock practice.
+- Updated `sessions.md` with Session 21 learning state and next focus.
+- No source code/dependency changes; documentation/learning notes only.
+
+## 18 July 2026 — Auth, Pro billing, Temporal, Compose, and Go telemetry
+- Added Better Auth email/password authentication backed by PostgreSQL. Protected the main page and all swarm routes; persisted `ownerId` and enforced replay ownership.
+- Added Stripe Pro billing with authenticated Checkout/Portal routes, raw-body webhook signature verification, subscription projection migration, and active/trialing entitlement checks.
+- Replaced one global run allowance with per-user plan limits: Free 10/hour and Pro 100/hour, atomically enforced in Redis.
+- Added a Temporal client, deterministic Workflow, Worker, and swarm Activity. Temporal mode persists events to Redis so SSE can bridge Worker output to the browser.
+- Added PostgreSQL, Temporal, and Go telemetry to Docker Compose. Added idempotent auth/billing migrations and documented the always-on Worker deployment requirement.
+- Added an independent Go Kafka consumer with manual commits, graceful shutdown, `/healthz`, Prometheus `/metrics`, unit tests, and a non-root multi-stage container.
+- Refactored the run launch into an application boundary so HTTP routes do not own Temporal/direct execution details.
+- Added UI account controls, live infrastructure mode, Free/Pro badge, Upgrade action, and Manage billing action.
+- Rewrote the README and added architecture/deployment docs with honest limits and production checklist.
+- Remaining learning is now narrower: Stripe lifecycle/security, Temporal determinism and phase-level Activities, production observability/cost, deployment operations, and interview rehearsal.

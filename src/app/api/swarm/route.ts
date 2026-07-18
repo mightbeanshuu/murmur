@@ -1,15 +1,22 @@
-import { EventBus } from "@/lib/swarm/bus";
 import {
   assertInfrastructureReady,
   InfrastructureUnavailableError,
 } from "@/lib/swarm/infrastructure";
-import { runSwarm } from "@/lib/swarm/orchestrator";
-import { enforceRateLimit, rateLimitKey, RateLimitError, RUN_RATE_LIMIT } from "@/lib/swarm/rateLimit";
+import { enforceRateLimit, rateLimitKey, RateLimitError } from "@/lib/swarm/rateLimit";
+import { getRequestSession } from "@/lib/auth";
+import { getUserPlan } from "@/lib/billing/repository";
+import { runAllowance } from "@/lib/billing/plans";
+import { launchSwarm } from "@/lib/swarm/launch";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
 export async function POST(req: Request) {
+  const authSession = await getRequestSession(req);
+  if (!authSession) {
+    return Response.json({ error: "Authentication required." }, { status: 401 });
+  }
+
   // Defensive parsing: invalid JSON becomes an empty goal so validation below
   // returns a clean 400 instead of crashing the route.
   const { goal } = await req.json().catch(() => ({ goal: "" }));
@@ -48,15 +55,11 @@ export async function POST(req: Request) {
     );
   }
 
-  const clientId =
-    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-    req.headers.get("x-real-ip") ??
-    "local";
-
   try {
+    const plan = await getUserPlan(authSession.user.id);
     await enforceRateLimit({
-      key: rateLimitKey("runs", clientId),
-      ...RUN_RATE_LIMIT,
+      key: rateLimitKey("runs", authSession.user.id),
+      ...runAllowance(plan),
     });
   } catch (e) {
     if (e instanceof RateLimitError) {
@@ -75,26 +78,26 @@ export async function POST(req: Request) {
   }
 
   const runId = crypto.randomUUID();
-  const bus = new EventBus(runId);
   const encoder = new TextEncoder();
-
-  // Kick off the run; failures are surfaced as an error event then close.
-  // The route returns the stream immediately while runSwarm keeps emitting.
-  // req.signal fires when the client disconnects, letting the orchestrator
-  // stop spending tokens instead of continuing invisibly in the background.
-  runSwarm(goal.trim(), bus, req.signal).catch(async (e) => {
-    bus.emit({ kind: "error", message: (e as Error).message });
-    try {
-      await bus.close("failed");
-    } catch (deliveryError) {
-      console.error("Failed to persist swarm failure", deliveryError);
-    }
-  });
+  let running;
+  try {
+    running = await launchSwarm({
+      runId,
+      ownerId: authSession.user.id,
+      goal: goal.trim(),
+      signal: req.signal,
+    });
+  } catch (error) {
+    return Response.json(
+      { error: `Unable to start swarm: ${(error as Error).message}` },
+      { status: 503, headers: { "retry-after": "5" } },
+    );
+  }
 
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        for await (const event of bus) {
+        for await (const event of running.events) {
           // Server-Sent Events frame format. The blank line terminates one event.
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
         }
@@ -115,6 +118,7 @@ export async function POST(req: Request) {
       "cache-control": "no-cache, no-transform",
       connection: "keep-alive",
       "x-murmur-run-id": runId,
+      "x-murmur-execution-mode": running.mode,
     },
   });
 }

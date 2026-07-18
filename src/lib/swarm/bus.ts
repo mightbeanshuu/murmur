@@ -21,7 +21,11 @@ export class EventBus implements AsyncIterable<SwarmEvent> {
   private deliveryFailure: unknown;
   private closePromise: Promise<void> | null = null;
 
-  constructor(private readonly runId: string) {}
+  constructor(
+    private readonly runId: string,
+    private readonly ownerId: string,
+    private readonly options: { localDelivery?: boolean } = {},
+  ) {}
 
   emit(event: SwarmEvent) {
     if (this.closing || this.closed) return;
@@ -31,6 +35,7 @@ export class EventBus implements AsyncIterable<SwarmEvent> {
       runId: this.runId,
       sequence: this.sequence,
       occurredAt: Date.now(),
+      ownerId: this.ownerId,
       event,
     };
     // Parallel workers can emit simultaneously; serial delivery preserves their
@@ -38,9 +43,11 @@ export class EventBus implements AsyncIterable<SwarmEvent> {
     this.delivery = this.delivery.catch(() => undefined).then(() => this.deliver(envelope));
     // If the HTTP stream is already waiting for the next event, resolve it
     // immediately. Otherwise, buffer the event until a reader asks for it.
-    const waiter = this.waiters.shift();
-    if (waiter) waiter.resolve({ value: event, done: false });
-    else this.queue.push(event);
+    if (this.options.localDelivery !== false) {
+      const waiter = this.waiters.shift();
+      if (waiter) waiter.resolve({ value: event, done: false });
+      else this.queue.push(event);
+    }
   }
 
   close(status: Exclude<RunStatus, "running"> = "completed") {
@@ -79,8 +86,11 @@ export class EventBus implements AsyncIterable<SwarmEvent> {
     try {
       // Redis is the canonical recoverable record. Publish to Kafka only after
       // Redis accepts the event so a Kafka failure never loses the source event.
-      await persistRunEvent(envelope);
-      await publishSwarmEvent(envelope);
+      const persisted = await persistRunEvent(envelope);
+      // A retried Temporal Activity can replay an already-stored sequence.
+      // Skip Kafka too, otherwise Redis would be idempotent while consumers
+      // still received a duplicate event.
+      if (persisted) await publishSwarmEvent(envelope);
     } catch (error) {
       this.deliveryFailure ??= error;
       console.error("Failed to deliver swarm event", error);

@@ -1,160 +1,151 @@
-# ✺ Murmur — Agent Swarm Orchestrator
+# ✺ Murmur
 
+Murmur turns one goal into a live, validated agent swarm. A planner creates a task DAG, workers execute ready tasks in parallel, a validator can request one revision, and a synthesizer produces the final answer while React Flow renders every event.
 
-> Watch a swarm of AI agents **self-organize** to solve what a single agent can't —
-> plan, delegate, validate, and synthesize, all live on one screen.
+Built for the Microsoft Build AI 2026 Agent Swarms theme.
 
-**Built for the Microsoft Build AI 2026 Hackathon · Theme: _Agent Swarms_.**
+## What makes this a production-shaped project
 
-A murmuration is the swarm behavior of starlings — thousands of birds acting as one
-intelligent system with no central controller. Murmur does that with AI agents: you
-hand it a complex goal, and a planner decomposes it into a dependency graph of
-specialist agents that run **in parallel**, **check each other's work**, and fuse their
-outputs into a single deliverable — while you watch the whole thing think.
+- Better Auth email/password sessions backed by PostgreSQL; every run is owned by a user.
+- Stripe Checkout, signed webhooks, Customer Portal, and PostgreSQL entitlement projection.
+- Free plan: 10 runs/hour. Pro plan: 100 runs/hour. Limits are Redis-backed and enforced by user ID.
+- Temporal moves long-running orchestration out of the HTTP process.
+- Redis stores run state, replayable events, and distributed rate limits.
+- Kafka receives versioned swarm events; an isolated Go consumer exports Prometheus metrics.
+- SSE streams live events to a Zustand store and React Flow graph.
+- Zod validates the planner and validator's structured LLM outputs.
 
----
+## Request path
 
-## Why this is hard (and why a swarm wins)
-
-One LLM call answering "build me a go-to-market strategy" gives you a shallow, generic
-wall of text. Real work is **decomposable, parallel, and self-correcting**. Murmur models
-that:
-
-| Problem with a single agent | Murmur's swarm answer |
-| --- | --- |
-| Does everything in one pass, shallow | **Planner** splits the goal into focused subtasks |
-| Serial and slow | Independent tasks run **concurrently** (DAG waves) |
-| No quality control | **Validator** scores every output, rejects weak work, triggers a revision |
-| One perspective | **Specialist agents** (researcher / analyst / writer / coder) each do what they're best at |
-| Opaque "trust me" output | Every token of every agent is **streamed live** onto a graph |
-
-## How it works
-
-```
-            ┌──────────┐
-   goal ──▶ │ Planner  │  decomposes into a task DAG (structured output → always valid)
-            └────┬─────┘
-                 │ assigns
-      ┌──────────┼───────────┐         ┌───────────┐
-      ▼          ▼           ▼   review │ Validator │  scores 0–10, can reject → revise
- ┌─────────┐ ┌────────┐ ┌────────┐◀────▶└───────────┘
- │Researcher│ │Analyst │ │ Writer │   (parallel wave; dependent tasks wait their turn)
- └────┬─────┘ └───┬────┘ └───┬────┘
-      └───────────┼──────────┘ results
-                  ▼
-            ┌──────────────┐
-            │ Synthesizer  │ ──▶ final deliverable
-            └──────────────┘
+```text
+Browser
+  │ authenticated POST /api/swarm { goal }
+  ▼
+Next.js route adapter
+  ├─ session + input + infrastructure checks
+  ├─ PostgreSQL plan lookup → Redis user quota
+  └─ starts Temporal workflow
+          │
+          ▼
+Temporal Worker → swarm Activity → planner → DAG workers → validators → synthesizer
+          │                         │
+          │                         ├─ OpenRouter through Vercel AI SDK
+          │                         └─ Zod structured-output validation
+          ▼
+Redis event stream ──SSE──▶ Zustand ──▶ React Flow
+          │
+          └─ Kafka ──▶ Go telemetry consumer ──▶ /metrics
 ```
 
-- **Self-organization** — the planner decides *how many* agents and *which types* per goal; nothing is hard-coded.
-- **Parallel DAG execution** — the orchestrator runs each wave of dependency-free tasks concurrently.
-- **Self-correction** — the validator gate is also the reliability mechanism: weak outputs get one feedback-driven revision before they're accepted.
-- **Shared blackboard** — downstream agents receive upstream outputs as context.
-- **Live observability** — a streaming SSE event bus drives a React Flow graph; click any node to read its output as it's written.
-- **Production controls** — required Kafka publishing mirrors every swarm event for distributed consumers; required Redis provides rate limits, durable run state, and replay across app instances.
+The planner, worker, validator, and synthesizer are code roles, not separate servers. TypeScript controls their order and data flow; the LLM supplies language reasoning.
 
-## Architecture
+## Clean architecture boundaries
 
-```
-src/lib/swarm/
-  types.ts         shared domain + streaming event types
-  config.ts        validated required Kafka/Redis environment contract
-  infrastructure.ts cached readiness probe for both dependencies
-  bus.ts           local SSE queue + ordered durable event delivery
-  kafka.ts         idempotent Kafka producer for distributed event streaming / audit trails
-  redis.ts          shared Redis connection for production state
-  session.ts        Redis run projection + append-only event stream for replay
-  rateLimit.ts     atomic Redis-backed shared rate limiter
-  models.ts        env-configurable Claude model roles
-  planner.ts       streamObject → validated task DAG
-  worker.ts        per-specialist system prompts; streams tokens
-  validator.ts     generateObject → score / approve / feedback
-  orchestrator.ts  DAG wave scheduler + validator-retry loop + synthesis
-src/app/api/health/route.ts  Kafka-topic + Redis readiness endpoint
-src/app/api/swarm/route.ts   readiness gate → POST goal → Server-Sent Events stream
-src/app/api/swarm/[runId]    GET persisted session + events for replay
-src/lib/store.ts             Zustand store; reduces events → graph state
-src/components/               React Flow graph, animated nodes, live side panel
+```text
+src/app/                    HTTP/pages: Next.js adapters and UI composition
+src/components/             browser-facing components
+src/lib/auth/               identity persistence
+src/lib/billing/            plans, Stripe gateway, entitlement repository
+src/lib/swarm/              orchestration domain + application services
+src/lib/temporal/           durable-workflow client adapter
+src/temporal/               workflow/worker process boundary
+services/telemetry/         independent Go Kafka consumer
+scripts/                    idempotent database migrations
 ```
 
-**Stack:** Next.js 16 (App Router) · TypeScript · Vercel AI SDK · OpenRouter (Claude + open models) · KafkaJS · ioredis · React Flow · Zustand.
+Routes authenticate and translate HTTP. `launchSwarm` hides direct-vs-Temporal execution. Billing policy is centralized in `plans.ts`; Stripe is the subscription source of truth and PostgreSQL is the fast local projection.
 
-**Models (mixed by role):** structured-output roles (planner, validator) run on a capable paid Claude model; plain-text roles (worker, synthesizer) run on free models. All slugs are env-overridable.
+## Local setup
 
-## Run it locally
+Requirements: Node.js 20+, pnpm 11, Docker, and an OpenRouter API key.
 
 ```bash
 pnpm install
-cp .env.example .env.local   # only needed if .env.local does not exist
-# add OPENROUTER_API_KEY to .env.local
-pnpm infra:up                # starts Kafka, creates the topic, starts Redis
-pnpm infra:topic             # verifies six topic partitions
-pnpm dev                     # http://localhost:3000
-curl -i http://localhost:3000/api/health
+cp .env.example .env.local
+# Fill OPENROUTER_API_KEY, BETTER_AUTH_SECRET, and optional Stripe values.
+
+pnpm infra:up
+pnpm db:migrate
+pnpm temporal:worker       # run in a second terminal
+pnpm dev                   # http://localhost:3000
 ```
 
-Then give the swarm a goal, e.g. _"Create a go-to-market strategy for an AI code-review startup"_,
-and watch it work.
+Generate an auth secret with `openssl rand -base64 32`.
 
-### Required Kafka and Redis flow
+Local services:
 
-Murmur deliberately fails closed when Kafka or Redis is unavailable. The app checks both dependencies before spending model tokens:
+| Service | Address | Purpose |
+| --- | --- | --- |
+| Next.js | `http://localhost:3000` | UI, auth, API, SSE |
+| Temporal UI | `http://localhost:8233` | workflow inspection |
+| Go telemetry | `http://localhost:9091/metrics` | Prometheus metrics |
+| PostgreSQL | `localhost:5432` | users, sessions, billing |
+| Redis | `localhost:6379` | state, replay, limits |
+| Kafka | `localhost:9092` | event stream |
 
-```text
-POST /api/swarm
-  → Kafka topic metadata + Redis PING readiness gate
-  → Redis distributed run-rate limit
-  → runSwarm emits a versioned event envelope
-  → EventBus branches:
-      ├─ local queue → SSE immediately for low-latency UI
-      └─ ordered durable chain → Redis atomic write → Kafka acks=all
-  → run completion waits for the durable chain; failure terminates the stream
+`pnpm infra:full` builds and starts the Temporal Worker too. It requires a populated `.env.local` because the Worker calls OpenRouter.
+
+## Pro payments
+
+Murmur uses Stripe-hosted surfaces so card data never enters this application:
+
+1. Create a Stripe Product and recurring Price.
+2. Set `STRIPE_SECRET_KEY` and `STRIPE_PRO_PRICE_ID`.
+3. Configure a webhook at `https://your-domain/api/billing/webhook` for:
+   - `checkout.session.completed`
+   - `customer.subscription.created`
+   - `customer.subscription.updated`
+   - `customer.subscription.deleted`
+4. Set its signing secret as `STRIPE_WEBHOOK_SECRET`.
+5. Enable the Stripe Customer Portal and set `APP_URL` to the deployed app URL.
+
+For local webhook testing:
+
+```bash
+stripe listen --forward-to localhost:3000/api/billing/webhook
 ```
 
-The local stack uses pinned `apache/kafka:4.3.1` and `redis:8.8.0-alpine` images. It explicitly creates `murmur.swarm.events` with six partitions and seven-day retention; Kafka automatic topic creation is disabled. Redis uses AOF with `appendfsync everysec` plus a named volume.
+Checkout and Portal routes always derive the Stripe customer from the authenticated server session. Webhooks verify the signature against the raw HTTP body before changing Pro access. Repeated subscription events are safe because they upsert the same row.
 
-Useful commands:
+## Why Go is here
+
+Go is not a second Murmur backend. `services/telemetry` is a distinct Kafka consumer that demonstrates a useful polyglot boundary:
+
+- joins the `murmur-telemetry-v1` consumer group;
+- parses versioned swarm envelopes;
+- manually commits offsets after each batch is handled; malformed events are counted and skipped so a poison message cannot block a partition;
+- exports health and Prometheus counters with a tiny runtime footprint;
+- shuts down gracefully.
+
+Deleting the Go service would remove metrics, but authentication, AI orchestration, and the UI would still work. That independence is the point.
+
+## Commands
 
 | Command | Purpose |
 | --- | --- |
-| `pnpm infra:up` | Start and health-check Kafka + Redis |
-| `pnpm infra:ps` | Show container health |
-| `pnpm infra:topic` | Describe topic partitions and leader metadata |
-| `pnpm infra:logs` | Follow Kafka/Redis logs |
-| `pnpm infra:down` | Stop services but preserve data volumes |
-| `pnpm infra:reset` | Stop services and delete local data volumes |
+| `pnpm typecheck` | TypeScript verification |
+| `pnpm lint` | ESLint checks |
+| `pnpm test` | unit/integration test suite |
+| `pnpm db:migrate` | Better Auth + billing schemas |
+| `pnpm infra:up` | start local dependencies |
+| `pnpm infra:full` | start dependencies + containerized Worker |
+| `pnpm infra:topic` | inspect the six-partition Kafka topic |
+| `pnpm infra:logs` | follow infrastructure logs |
+| `pnpm infra:down` | stop containers, preserve volumes |
+| `pnpm infra:reset` | remove containers and local data volumes |
 
-### Production environment
+## Honest durability boundary
 
-Use managed, replicated Kafka and Redis endpoints rather than the single-node local Compose stack:
+Temporal durably accepts a run and allows the Worker to live outside Vercel/Next.js. The current Workflow executes the whole swarm as one Activity and deliberately disables automatic Activity retries because model calls are not yet fully idempotent. A Worker crash can restart the Activity, but phase-level resume is not implemented yet. The next reliability step is to split planning, task waves, validation, and synthesis into idempotent Activities with persisted checkpoints.
 
-```bash
-KAFKA_BROKERS=broker-1:9092,broker-2:9092
-KAFKA_SWARM_EVENTS_TOPIC=murmur.swarm.events
-KAFKA_SSL=1
-KAFKA_SASL_MECHANISM=scram-sha-512
-KAFKA_USERNAME=...
-KAFKA_PASSWORD=...
-REDIS_URL=rediss://default:password@host:6379
-```
+## Deployment
 
-- Kafka receives every `SwarmEvent` as a versioned envelope, keyed by run id and acknowledged by all in-sync replicas. Kafka preserves order within one run's partition while different runs can scale across partitions.
-- Redis enforces atomic distributed limits for new runs/model attempts. A Lua script atomically stores an idempotent event sequence in both the session projection and Redis Stream.
-- A completed or reconnecting client can retrieve Redis-backed state from `GET /api/swarm/:runId`; the POST response includes that id in `x-murmur-run-id`.
-- `GET /api/health` returns HTTP 200 only when Redis responds and the required Kafka topic exists; otherwise it returns HTTP 503.
-- Configure the Kafka topic with replication factor 3 and `min.insync.replicas=2`, use TLS/SASL, enable Redis high availability/backups, and alert on readiness failures, consumer lag, Redis memory, and event-delivery latency.
+Vercel can host the Next.js web adapter, but it cannot host the continuously polling Temporal Worker or Go consumer. A real deployment needs:
 
-Kafka and Redis are two different systems, so their writes cannot share one transaction. Murmur writes Redis first as the recoverable source record and fails the run visibly if Kafka publishing fails. SSE stays responsive because the local event branch does not wait on each remote acknowledgement, but the run cannot close successfully until durable delivery catches up. For a strict no-gap event pipeline at larger scale, move Kafka publication to a dedicated transactional-outbox worker that retries unpublished Redis events.
+- Vercel for Next.js;
+- managed PostgreSQL, Redis, Kafka, and Temporal Cloud/self-hosted Temporal;
+- one container service for the Temporal Worker;
+- one small container service for Go telemetry;
+- production auth, OpenRouter, Stripe, and infrastructure environment variables.
 
-## Build and deploy
-
-The repository includes a multi-stage production `Dockerfile`; `next.config.ts` emits a minimal standalone server bundle. Build it with:
-
-```bash
-docker build -t murmur:local .
-```
-
-Inject secrets and managed infrastructure endpoints at runtime—never bake them into the image. The `/api/swarm` route streams for up to five minutes (`maxDuration = 300`). If deploying on a serverless platform, verify that its request duration and Kafka connection model fit long-lived SSE runs; a container service plus background workers is the safer high-throughput architecture.
-
----
+Do not use Compose hostnames or `localhost` from Vercel. Use TLS-enabled managed endpoints and run `pnpm db:migrate` as a release step. See [docs/architecture.md](docs/architecture.md) and [docs/deployment.md](docs/deployment.md).

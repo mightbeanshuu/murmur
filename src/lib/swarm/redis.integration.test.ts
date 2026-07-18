@@ -63,6 +63,7 @@ describe("persistRunEvent against real Redis", () => {
       version: 1,
       id: `${runId}:${sequence}`,
       runId,
+      ownerId: "test-user",
       sequence,
       occurredAt: Date.now(),
       event: { kind: "run.start", goal: "integration test goal", at: Date.now() },
@@ -74,6 +75,7 @@ describe("persistRunEvent against real Redis", () => {
     await persistRunEvent(envelope(runId, 1));
     const session = await getRunSession(runId);
     expect(session?.runId).toBe(runId);
+    expect(session?.ownerId).toBe("test-user");
     expect(session?.goal).toBe("integration test goal");
     expect(session?.eventCount).toBe(1);
   });

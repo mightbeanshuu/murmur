@@ -199,6 +199,30 @@
 - **Verification:** typecheck clean, 15/15 tests passed, lint clean.
 - **Next Session Focus:** Commit/push this work; continue with reliable-orchestration-architecture theory (job queues, outbox pattern in more depth) once infra/testing topics are settled, or move to whichever topic the learner picks next.
 
+## Session 17 — Reliable orchestration architecture: interview gauntlet
+- **Route:** Basic to Interview, Phase 2 / Interview Prep crossover
+- **Prerequisite Check:** Learner asked specifically for a chat-only list (no code) of what a senior interviewer would point out about Murmur's orchestration reliability, paired with a counter-argument and the named upgrade for each — i.e. Session 18-style interview prep pulled forward and scoped to reliable orchestration specifically.
+- **Concepts Taught (10-item attack/counter/upgrade list):**
+  1. In-request orchestration dies with the invocation (no crash resumption) — counter: durable record via Redis vs. durable workflow are different things; upgrade: BullMQ job queue, or Temporal/Inngest for step-level replay.
+  2. "Durable history" vs. "durable workflow" conflation — counter: draw the distinction proactively; upgrade: persist per-task status as data, add a staleness-sweep recovery process.
+  3. Cancellation propagation — counter: THIS ONE IS ALREADY FIXED (Session 16) — `req.signal` → `runSwarm` → wave-boundary checks → threaded into every model call via `AbortSignal.any`; honest residue: checkpoint-based, not instantaneous; upgrade: check signal inside the validator retry loop too, add a distinct `cancelled` terminal state.
+  4. Redis/Kafka no shared transaction — counter: Redis-first ordering already prevents event loss, Kafka failure is visible not silent; upgrade: transactional outbox relay (idempotent producer makes retries safe).
+  5. Retry policy / backoff — counter: retries are lateral (next model) not vertical (same model with backoff), `maxRetries:0` is deliberate; upgrade: exponential backoff + jitter for same-resource retries (the future outbox relay).
+  6. Repeatedly-failing tasks — counter: one feedback revision then graceful placeholder degradation, visible in UI/event log; upgrade: dead-letter queue after N failures, explicit "degraded" marker on final output.
+  7. EventBus queue is unbounded — counter: bounded in practice (one browser/run), durable path is serialized; upgrade: high-water-mark cap, or Kafka-based fan-out for real backpressure.
+  8. Horizontal scaling / multi-instance SSE — counter: live SSE is instance-pinned, but replay works from any instance via Redis; upgrade: Redis Pub/Sub or Kafka-based fan-out so any instance can serve any run's live stream.
+  9. Per-IP rate limiting with no auth — counter: honestly demo-scale trust model, stated as such; upgrade: real per-user auth, quotas by user ID, token bucket, provider-reported cost accounting.
+  10. No observability — counter: readiness endpoint exists, nothing else does; upgrade: structured logs with `runId` correlation, RED metrics, Kafka lag/Redis memory monitoring, alerting on 503-rate and `AllModelsFailed`-rate.
+- **Meta-framing taught:** the strongest interview move is naming your own system's gaps unprompted with a prioritized fix list, and pointing to the ALREADY-FIXED items (commits `885eee0`, `872cd1e`) as proof of a working audit-and-fix loop rather than theoretical awareness.
+- **Offered but not yet taken:** a live mock-interview drill (tutor attacks each point, learner counters from memory).
+- **Next Session Focus:** Learner's choice — mock interview drill on this list, or continue into observability/cost/security (Session 16 on the original roadmap numbering) or DevOps/Vercel provisioning (still blocked on Redpanda/Redis Cloud signups).
+
+## Session 17 addendum — item 5 implemented for real
+- Learner asked to actually implement the backoff+jitter retry policy from gauntlet item 5, not just describe it. Identified the one legitimate SAME-resource retry site in the codebase: Redis reconnection in `src/lib/swarm/redis.ts`'s `retryStrategy` (previously linear: `attempt * 100` capped at 2000ms).
+- Changed to real exponential backoff with jitter: `base = min(2^attempt * 50, 2000)`, `jitter = random() * base * 0.5`, returns `round(base + jitter)`. Prevents concurrent server instances reconnecting after a Redis outage from retrying in lockstep.
+- Verified: typecheck clean, 15/15 tests passed, lint clean.
+- Learner then asked for an expanded, deep version of the interview attack/counter/upgrade list covering as much of the project as possible — delivered in chat, same format, continuing the numbering from the original 10.
+
 ## Checkpoint resolution (before Session 15)
 - **S9 (fallback chain):** Tutor walked the answer — `throw new Error("empty completion")` in `runText` is a non-network condition that still triggers the `continue` (harmless here since retrying is actually correct for empty output, but demonstrates `shouldFallback`'s check doesn't gate anything real).
 - **S10 (nullable output):** Tutor walked the answer — `estTokens(d.output)` calling `.length` on `null` would throw at runtime; TypeScript narrowing would force `?? ""` guards everywhere `output` is read, converting a latent runtime bug into a compile-time one.
@@ -224,3 +248,53 @@
 - **Verification:** Headless Chrome PDF render; visual inspection of opening/TOC, sampled frontend/backend/Redis/Kafka/production pages, glossary, source list, and final rubric; no sampled clipping or blank page.
 - **Open Recall Checkpoints:** S9 fallback policy, S10 runtime nullable/invalid output, S12 Kafka event 7/20. These are included in Module 18 for spaced repetition.
 - **Next Session Focus:** Learner delivers the 30-second introduction and answers one open checkpoint aloud before moving to Kafka consumer implementation or managed Redpanda/Redis provisioning.
+
+## Session 18 — API key, OpenRouter client, AI SDK, and agent-call flow
+- **Route:** Basic to Interview, Phase 2.
+- **Prerequisite Check:** Learner asked to continue the next lesson and specifically wanted the full Murmur request path stored, plus a deeper explanation of how the backend creates the OpenRouter model client, what an SDK is, why planner/worker/validator call the model, and how the AI SDK sends requests.
+- **Concepts Taught:** Full browser-to-backend-to-agent-to-model-to-SSE path; `OPENROUTER_API_KEY` as provider permission; model ID as the selected AI brain; system prompt as role instruction; user prompt as task content; `createOpenRouter({ apiKey })` as provider-client creation; `model(id)` as model reference creation; `chainFor(role)` as dynamic model fallback selection; AI SDK as a helper layer over raw HTTP requests; planner/validator structured object calls vs worker/synthesizer streaming text calls.
+- **Examples Used:** `POST /api/swarm` with `{ goal: "..." }`; planner creating a task graph; worker streaming text deltas; validator returning score/approval/feedback; synthesizer combining worker outputs.
+- **Small Terms Explained:** SDK, OpenRouter, API key, model client, model ID, prompt, system prompt, user prompt, structured object, stream, SSE.
+- **Doubts and Answers:** API key does not itself generate replies; it authorizes the backend to call OpenRouter. The actual reply comes from whichever model ID the backend selects through the role's fallback chain. Planner/worker/validator are not separate servers; they are backend code roles made agent-like by prompts, jobs, input/output contracts, and orchestration rules.
+- **Artifacts:** Added "API key, OpenRouter client, AI SDK, and Murmur agent-call flow" to `imp notes.md`.
+- **Learner Gaps:** Needs to answer the checkpoint from memory: API key vs model ID vs system prompt vs user prompt vs AI SDK.
+- **Grasp-Speed Signal:** Learner is moving fast but still needs very explicit request-path and provider/model vocabulary repetition.
+- **Adaptation Used:** Reused the full numbered Murmur path and mapped each abstract AI term directly to current project code.
+- **Next Session Focus:** Continue with Next.js App Router/client-server boundary OR drill the current checkpoint first, then trace `src/app/api/swarm/route.ts` line by line.
+
+## Session 19 — Checkpoint drill + Next.js App Router client/server boundary
+- **Route:** Basic to Interview, Phase 2.
+- **Prerequisite Check:** Learner chose to do both pending items: drill API key/model/prompt/SDK vocabulary and then learn Next.js App Router plus client/server boundary.
+- **Concepts Taught:** Checkpoint answer for API key vs model ID vs system prompt vs user prompt vs AI SDK; Next.js file-based route mapping; page component vs route handler; server component default; `"use client"` client component marker; browser-side `fetch("/api/swarm")`; backend-only `process.env.OPENROUTER_API_KEY`; `POST(req: Request)` route handler; `Response` and streaming `ReadableStream`; why Redis/Kafka/OpenRouter calls belong on the server.
+- **Examples Used:** `src/app/page.tsx`, `src/lib/useRunSwarm.ts`, `src/app/api/swarm/route.ts`, and `src/app/api/health/route.ts`.
+- **Small Terms Explained:** App Router, route handler, client component, server component, `Request`, `Response`, `process.env`, `fetch`, `AbortController`, `ReadableStream`, `TextEncoder`, route boundary.
+- **Learner Gaps:** Needs to explain from memory why moving `OPENROUTER_API_KEY` or Kafka/Redis clients into a client component would be a security/design bug.
+- **Next Session Focus:** Trace `src/app/api/swarm/route.ts` line by line, then frontend `useRunSwarm.ts` stream parsing line by line.
+
+## Session 20 — SSE deep dive + JSON parsing vs Zod validation
+- **Route:** Basic to Interview, Phase 2.
+- **Prerequisite Check:** Learner asked for a deeper SSE lesson with code and interview aspects, and specifically asked what `parse JSON` does compared with Zod schema validation for LLM replies and JSON over HTTP networking.
+- **Concepts Taught:** SSE as a long-lived one-way HTTP response; server `ReadableStream`; `TextEncoder`; SSE frame format `data: ...\n\n`; client `response.body.getReader()`; `TextDecoder`; chunk buffering; frame splitting by blank line; `JSON.stringify` to turn objects into network text; `JSON.parse` to turn received network text back into objects; HTTP JSON parsing via `req.json()`; difference between parsing and validation; Zod as runtime shape validation for LLM structured output.
+- **Examples Used:** `src/app/api/swarm/route.ts` SSE producer, `src/lib/useRunSwarm.ts` SSE consumer, `src/lib/swarm/bus.ts` AsyncIterable event queue, and `src/lib/swarm/planner.ts` Zod planner schema.
+- **Small Terms Explained:** SSE, frame, chunk, buffer, encoder, decoder, JSON, parse, stringify, validation, schema, `req.json()`, `res.body.getReader()`, `controller.enqueue`.
+- **Doubts and Answers:** `JSON.parse` only converts a JSON string into a JavaScript value; it does not prove the value has the expected shape. Zod validates shape/types/rules. Murmur uses JSON parsing for HTTP/SSE transport and Zod for strict LLM-generated structured replies.
+- **Learner Gaps:** Needs to repeat the difference between "valid JSON syntax" and "valid business/schema shape" from memory.
+- **Next Session Focus:** Continue networking foundation: HTTP request/response anatomy, headers, body, status codes, streaming vs normal response, then trace `route.ts` line by line.
+
+## Session 21 — Remaining project learning roadmap refresh
+- **Route:** Basic to Interview, Phase 2.
+- **Prerequisite Check:** Learner paused the SSE/networking lesson and asked specifically for what is left in the project to learn, and to update `sessions.md`, `progress.md`, and `imp notes.md`.
+- **Concepts Covered:** Current completed areas vs remaining areas; remaining HTTP/networking fundamentals; Next.js App Router route mapping; TypeScript line-by-line confidence; Kafka consumer/offset/lag gap; Redis advanced revision; reliable orchestration architecture; observability/cost/security; production deployment; frontend internals; senior interview delivery.
+- **Artifacts:** Added "What is left to learn in Murmur" to `imp notes.md`.
+- **Learner Gaps:** Needs a clean ordered path through remaining topics instead of jumping between concepts; still needs recall practice on JSON parse vs Zod, SSE purpose, and `/api/swarm/[runId]` purpose.
+- **Grasp-Speed Signal:** Learner is moving quickly and tends to request broad roadmap resets; keep lessons tightly sequenced and project-file-based.
+- **Next Session Focus:** HTTP anatomy through all three `route.ts` files, starting with why `/api/swarm`, `/api/swarm/[runId]`, and `/api/health` exist.
+
+## Session 22 — Platform hardening: auth, billing, Temporal, and Go
+- **Date:** 18 July 2026.
+- **Route:** Project engineering + interview readiness; implementation session, not a tutor-skill lesson.
+- **Implemented:** Better Auth with PostgreSQL sessions and per-run ownership; Free/Pro Stripe subscriptions; per-user Redis quotas; Temporal Workflow/Worker boundary; Docker Compose services for PostgreSQL/Temporal/Go; isolated Go Kafka telemetry consumer; health/status UI; clean application/infrastructure boundaries; deployment documentation.
+- **Go mental model:** Go does not replace Next.js. It independently consumes Kafka events, commits valid messages, and exposes `/healthz` plus Prometheus `/metrics`. The swarm still works if telemetry is removed.
+- **Payments mental model:** Stripe owns money/subscription truth. A signed webhook updates Murmur's PostgreSQL entitlement projection. Free users receive 10 runs/hour; active/trialing Pro users receive 100 runs/hour; Customer Portal manages billing.
+- **Temporal honesty:** A run is durably dispatched outside the HTTP process, but the swarm is currently one coarse Activity with retries disabled. Phase-level idempotent Activities/checkpoints remain the next reliability lesson.
+- **Next Session Focus:** Trace auth cookies and the Stripe webhook request line by line, then learn Temporal Workflow determinism versus Activity side effects.

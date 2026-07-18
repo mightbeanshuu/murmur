@@ -21,11 +21,6 @@ function intEnv(name: string, fallback: number) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-export const RUN_RATE_LIMIT = {
-  limit: intEnv("MURMUR_RUNS_PER_WINDOW", 20),
-  windowSeconds: intEnv("MURMUR_RUN_WINDOW_SECONDS", 3600),
-};
-
 export const MODEL_RATE_LIMIT = {
   limit: intEnv("MURMUR_MODEL_CALLS_PER_WINDOW", 120),
   windowSeconds: intEnv("MURMUR_MODEL_WINDOW_SECONDS", 3600),

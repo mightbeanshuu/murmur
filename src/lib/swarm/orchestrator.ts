@@ -22,9 +22,9 @@ interface Done {
  * are all satisfied run concurrently; each is gated by the validator with one
  * self-correcting retry. A synthesizer fuses the outputs into the final answer.
  *
- * `signal` is the client request's abort signal. If the client disconnects
- * (closes the tab, aborts the fetch), the run stops spending tokens at the
- * next checkpoint instead of continuing invisibly in the background.
+ * `signal` represents the execution owner's cancellation request. In direct
+ * mode that owner is the HTTP request; in Temporal mode it is the Activity,
+ * which intentionally continues if a browser merely disconnects.
  */
 export async function runSwarm(goal: string, bus: EventBus, signal?: AbortSignal) {
   const t0 = Date.now();
