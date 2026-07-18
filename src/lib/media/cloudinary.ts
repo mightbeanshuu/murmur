@@ -44,6 +44,7 @@ export async function storeSwarmImage(input: {
     cloud_name: config.cloudName,
     api_key: config.apiKey,
     api_secret: config.apiSecret,
+    hide_sensitive: true,
     secure: true,
   });
 
