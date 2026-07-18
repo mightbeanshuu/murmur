@@ -238,7 +238,7 @@ export function SwarmGraph() {
       </div>
       <div
         aria-label="Agent execution dependency graph"
-        className="murmur-graph-canvas"
+        className={`murmur-graph-canvas${runStatus === "running" ? " is-live" : ""}`}
         role="region"
       >
         <ReactFlow

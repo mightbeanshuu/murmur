@@ -26,7 +26,10 @@ export function GoalBar() {
   };
 
   return (
-    <section className="murmur-goalbar" aria-labelledby="murmur-goal-title">
+    <section
+      className={`murmur-goalbar${busy ? " is-live" : ""}`}
+      aria-labelledby="murmur-goal-title"
+    >
       <div className="murmur-goalbar-head">
         <div>
           <span className="murmur-section-icon"><SparklesIcon size={16} /></span>
@@ -35,7 +38,9 @@ export function GoalBar() {
             <p>Give it a complex outcome. Murmur will plan the path and verify the work.</p>
           </div>
         </div>
-        <span className="murmur-key-hint">⌘ ↵ to deploy</span>
+        <span className={`murmur-key-hint${busy ? " is-live" : ""}`} aria-live="polite">
+          {busy ? "Live orchestration" : "⌘ ↵ to deploy"}
+        </span>
       </div>
       <form
         onSubmit={(e) => {
@@ -72,7 +77,10 @@ export function GoalBar() {
           </button>
         ))}
         </div>
-        <div className="murmur-pipeline" aria-label="Swarm execution phases">
+        <div
+          className={`murmur-pipeline${busy ? " is-live" : ""}`}
+          aria-label="Swarm execution phases"
+        >
           <span><AgentIcon type="planner" size={14} />Plan</span>
           <i />
           <span><AgentIcon type="researcher" size={14} />Execute</span>
