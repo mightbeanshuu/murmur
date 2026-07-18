@@ -310,7 +310,11 @@
   transition: border-color 180ms var(--ease-out), background 180ms var(--ease-out);
 }
 
-.murmur-goalform:focus-within { border-color: var(--accent); background: var(--surface); }
+.murmur-goalform:focus-within {
+  border-color: var(--accent);
+  background: var(--surface);
+  box-shadow: 0 0 0 1px rgb(167 139 250 / 18%);
+}
 
 .murmur-input {
   width: 100%;
@@ -327,7 +331,14 @@
 }
 
 .murmur-input::placeholder { color: var(--subtle); opacity: 1; }
-.murmur-deploy { min-width: 146px; align-self: stretch; padding: 0 16px; }
+.murmur-input:focus-visible { outline: 0; }
+.murmur-deploy {
+  min-width: 154px;
+  flex: 0 0 154px;
+  align-self: stretch;
+  padding: 0 16px;
+  white-space: nowrap;
+}
 
 .murmur-goalbar-foot { justify-content: space-between; gap: 20px; margin-top: 10px; }
 .murmur-examples { display: flex; min-width: 0; flex-wrap: wrap; gap: 6px; }
@@ -477,11 +488,53 @@
   padding: 0 13px;
 }
 
-.murmur-graph-head > div { display: flex; min-width: 0; align-items: center; gap: 8px; }
-.murmur-graph-head > div > svg { flex: 0 0 auto; color: var(--accent); }
-.murmur-graph-head > div > span { display: flex; min-width: 0; flex-direction: column; }
+.murmur-graph-heading { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.murmur-graph-heading > svg { flex: 0 0 auto; color: var(--accent); }
+.murmur-graph-heading > span { display: flex; min-width: 0; flex-direction: column; }
 .murmur-graph-head strong { color: var(--text); font-size: 11px; }
 .murmur-graph-head small { overflow: hidden; max-width: 42vw; color: var(--subtle); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+
+.murmur-graph-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.murmur-graph-view-button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--text);
+  cursor: pointer;
+  padding: 0 10px;
+  font-size: 9px;
+  font-weight: 680;
+  transition: border-color 180ms var(--ease-out), background 180ms var(--ease-out), color 180ms var(--ease-out);
+}
+
+.murmur-graph-view-button:hover {
+  border-color: var(--accent);
+  background: var(--surface-active);
+  color: var(--ink);
+}
+
+.murmur-graph-view-button svg { color: var(--accent); }
+
+.murmur-graph-view-button kbd {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  padding: 2px 4px;
+  font-family: var(--font-mono);
+  font-size: 7px;
+  font-weight: 500;
+}
 
 .murmur-run-state { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; color: var(--subtle); font-family: var(--font-mono); font-size: 8px; }
 .murmur-run-state.is-running { color: var(--cyan); }
@@ -489,6 +542,31 @@
 .murmur-run-state.is-error { color: var(--danger); }
 
 .murmur-graph-canvas { position: relative; min-height: 0; flex: 1; }
+.murmur-graph-overlay {
+  position: fixed;
+  z-index: var(--z-modal);
+  inset: 0;
+  display: flex;
+  background:
+    radial-gradient(800px 480px at 50% 0%, rgb(91 60 174 / 18%), transparent 66%),
+    rgb(8 7 13 / 98%);
+  padding: 12px;
+}
+
+.murmur-graph.is-expanded {
+  width: 100%;
+  height: 100%;
+  border-color: var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--canvas);
+}
+
+.murmur-graph.is-expanded .murmur-graph-head {
+  min-height: 58px;
+  padding-inline: 17px;
+}
+
+.murmur-graph.is-expanded .murmur-graph-head small { max-width: 62vw; }
 .murmur-graph-empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; pointer-events: none; text-align: center; }
 .murmur-graph-empty > span { display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface); color: var(--accent); }
 .murmur-graph-empty h3 { margin: 13px 0 5px; color: var(--text); font-size: 13px; }
@@ -610,11 +688,17 @@
   .murmur-goalbar-head p { display: none; }
   .murmur-goalform { flex-direction: column; }
   .murmur-input { min-height: 74px; }
-  .murmur-deploy { width: 100%; min-height: 44px; }
+  .murmur-deploy { width: 100%; min-height: 44px; flex-basis: auto; }
   .murmur-examples { flex-wrap: nowrap; overflow-x: auto; }
   .murmur-chip { flex: 0 0 auto; }
   .murmur-stage { grid-template-rows: 500px minmax(460px, auto); }
   .murmur-graph-head small { display: none; }
+  .murmur-run-state { display: none; }
+  .murmur-graph-overlay { padding: 0; }
+  .murmur-graph.is-expanded { border: 0; border-radius: 0; }
+  .murmur-graph.is-expanded .murmur-graph-head { min-height: 54px; padding-inline: 10px; }
+  .murmur-graph-view-button { min-height: 38px; }
+  .murmur-graph-view-button kbd { display: none; }
   .murmur-system-popover { position: fixed; top: 64px; right: 10px; left: 10px; width: auto; }
   .murmur-user-popover { position: fixed; top: 64px; right: 10px; width: min(260px, calc(100vw - 20px)); }
 }

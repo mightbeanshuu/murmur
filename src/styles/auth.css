@@ -10,7 +10,6 @@
   display: flex;
   min-width: 0;
   flex-direction: column;
-  justify-content: space-between;
   padding: clamp(28px, 5vw, 72px);
   border-right: 1px solid var(--line);
 }
@@ -41,7 +40,7 @@
 
 .murmur-auth-story {
   max-width: 690px;
-  margin-top: clamp(54px, 9vh, 112px);
+  margin-top: clamp(46px, 7vh, 76px);
 }
 
 .murmur-live-label {
@@ -76,8 +75,9 @@
 .murmur-auth-graph {
   position: relative;
   width: min(100%, 700px);
-  height: 250px;
-  margin-top: clamp(40px, 8vh, 84px);
+  height: 224px;
+  flex: 0 0 auto;
+  margin-top: clamp(30px, 4.5vh, 46px);
 }
 
 .murmur-auth-node {
@@ -294,6 +294,7 @@
 }
 
 .murmur-field input::placeholder { color: var(--subtle); opacity: 1; }
+.murmur-field input:focus-visible { outline: 0; }
 .murmur-auth-form .murmur-primary-button { width: 100%; margin-top: 2px; }
 
 .murmur-auth-error {
@@ -326,6 +327,20 @@
   .murmur-auth-showcase { min-height: 680px; border-right: 0; border-bottom: 1px solid var(--line); }
   .murmur-auth-story h1 { font-size: clamp(2.8rem, 9vw, 4.8rem); }
   .murmur-auth-entry { min-height: 640px; }
+}
+
+@media (min-width: 981px) and (max-height: 900px) {
+  .murmur-auth-showcase { padding-block: 28px; }
+  .murmur-auth-story { margin-top: 32px; }
+  .murmur-auth-story h1 { margin-block: 16px 13px; font-size: clamp(2.8rem, 4.7vw, 4.15rem); }
+  .murmur-auth-story p { font-size: 13px; line-height: 1.6; }
+  .murmur-auth-graph { height: 196px; margin-top: 24px; }
+  .murmur-auth-node { min-height: 62px; padding: 9px 11px; }
+  .murmur-auth-node.is-research,
+  .murmur-auth-node.is-analysis { top: 68px; }
+  .murmur-auth-edge.is-three,
+  .murmur-auth-edge.is-four { top: 128px; }
+  .murmur-auth-proof { margin-top: 20px; }
 }
 
 @media (max-width: 620px) {

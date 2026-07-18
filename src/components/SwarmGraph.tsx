@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { createPortal } from "react-dom";
 import ReactFlow, {
   Background,
   BackgroundVariant,
@@ -12,7 +13,13 @@ import ReactFlow, {
 import "reactflow/dist/style.css";
 import { useSwarm, type AgentNode } from "@/lib/store";
 import { AgentFlowNode, type FlowNodeData } from "./AgentFlowNode";
-import { LayersIcon, RadioIcon, SparklesIcon } from "./ui/Icons";
+import {
+  CloseIcon,
+  LayersIcon,
+  MaximizeIcon,
+  RadioIcon,
+  SparklesIcon,
+} from "./ui/Icons";
 
 const nodeTypes = { agent: AgentFlowNode };
 
@@ -75,6 +82,10 @@ const EDGE_COLOR: Record<string, string> = {
 };
 
 export function SwarmGraph() {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const expandButtonRef = useRef<HTMLButtonElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const shouldRestoreFocusRef = useRef(false);
   const agents = useSwarm((s) => s.agents);
   const edges = useSwarm((s) => s.edges);
   const selected = useSwarm((s) => s.selected);
@@ -130,22 +141,106 @@ export function SwarmGraph() {
     [edges, agents],
   );
 
-  return (
+  useEffect(() => {
+    if (!isExpanded) {
+      if (shouldRestoreFocusRef.current) {
+        shouldRestoreFocusRef.current = false;
+        expandButtonRef.current?.focus();
+      }
+      return;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    shouldRestoreFocusRef.current = true;
+    document.body.style.overflow = "hidden";
+    closeButtonRef.current?.focus();
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isExpanded]);
+
+  const handleDialogKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setIsExpanded(false);
+      return;
+    }
+
+    if (event.key !== "Tab") return;
+
+    const focusable = Array.from(
+      event.currentTarget.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((element) => element.getAttribute("aria-hidden") !== "true");
+    const first = focusable[0];
+    const last = focusable.at(-1);
+
+    if (!first || !last) return;
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  const renderGraph = (expanded: boolean) => (
     <>
       <div className="murmur-graph-head">
-        <div>
+        <div className="murmur-graph-heading">
           <LayersIcon size={16} />
           <span>
-            <strong>Execution graph</strong>
+            <strong id={expanded ? "murmur-expanded-graph-title" : undefined}>
+              Execution graph
+            </strong>
             <small>{goal || "Dependencies and agent handoffs appear here"}</small>
           </span>
         </div>
-        <span className={`murmur-run-state is-${runStatus}`}>
-          <RadioIcon size={13} />
-          {runStatus === "running" ? "Live" : runStatus === "done" ? "Complete" : runStatus === "error" ? "Interrupted" : "Standby"}
-        </span>
+        <div className="murmur-graph-actions">
+          <span className={`murmur-run-state is-${runStatus}`}>
+            <RadioIcon size={13} />
+            {runStatus === "running"
+              ? "Live"
+              : runStatus === "done"
+                ? "Complete"
+                : runStatus === "error"
+                  ? "Interrupted"
+                  : "Standby"}
+          </span>
+          {expanded ? (
+            <button
+              ref={closeButtonRef}
+              aria-label="Close expanded execution graph"
+              className="murmur-graph-view-button"
+              type="button"
+              onClick={() => setIsExpanded(false)}
+            >
+              <CloseIcon size={15} />
+              <span>Close</span>
+              <kbd>Esc</kbd>
+            </button>
+          ) : (
+            <button
+              ref={expandButtonRef}
+              aria-haspopup="dialog"
+              className="murmur-graph-view-button"
+              type="button"
+              onClick={() => setIsExpanded(true)}
+            >
+              <MaximizeIcon size={15} />
+              <span>Expand graph</span>
+            </button>
+          )}
+        </div>
       </div>
-      <div className="murmur-graph-canvas">
+      <div
+        aria-label="Agent execution dependency graph"
+        className="murmur-graph-canvas"
+        role="region"
+      >
         <ReactFlow
           nodes={rfNodes}
           edges={rfEdges}
@@ -153,7 +248,7 @@ export function SwarmGraph() {
           onNodeClick={(_, n) => select(n.id)}
           onPaneClick={() => select(null)}
           fitView
-          fitViewOptions={{ padding: 0.25 }}
+          fitViewOptions={{ padding: expanded ? 0.12 : 0.25 }}
           minZoom={0.2}
           maxZoom={1.5}
           proOptions={{ hideAttribution: true }}
@@ -169,6 +264,26 @@ export function SwarmGraph() {
           </div>
         ) : null}
       </div>
+    </>
+  );
+
+  return (
+    <>
+      {!isExpanded ? renderGraph(false) : null}
+      {isExpanded
+        ? createPortal(
+            <div
+              aria-labelledby="murmur-expanded-graph-title"
+              aria-modal="true"
+              className="murmur-graph-overlay"
+              role="dialog"
+              onKeyDown={handleDialogKeyDown}
+            >
+              <div className="murmur-graph is-expanded">{renderGraph(true)}</div>
+            </div>,
+            document.body,
+          )
+        : null}
     </>
   );
 }

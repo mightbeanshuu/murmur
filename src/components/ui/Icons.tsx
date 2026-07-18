@@ -58,6 +58,14 @@ export function ClockIcon(props: IconProps) {
   );
 }
 
+export function CloseIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="m6 6 12 12M18 6 6 18" {...strokeProps} />
+    </Icon>
+  );
+}
+
 export function CreditCardIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -110,6 +118,14 @@ export function MailIcon(props: IconProps) {
     <Icon {...props}>
       <rect x="3.5" y="5.5" width="17" height="13" rx="2.5" {...strokeProps} />
       <path d="m5 7 7 5.5L19 7" {...strokeProps} />
+    </Icon>
+  );
+}
+
+export function MaximizeIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M9 4H4v5M15 4h5v5M20 15v5h-5M9 20H4v-5" {...strokeProps} />
     </Icon>
   );
 }
