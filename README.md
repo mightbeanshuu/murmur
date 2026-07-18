@@ -124,9 +124,9 @@ Go is not a second Murmur backend. `services/telemetry` is a distinct Kafka cons
 
 Deleting the Go service would remove metrics, but authentication, AI orchestration, and the UI would still work. That independence is the point.
 
-Kafka is strict by default. Constrained serverless demos can explicitly set
-`MURMUR_KAFKA_REQUIRED=0`; Redis remains durable and runs continue, while Kafka/Go
-telemetry is visibly absent. Full deployments and local Compose keep strict mode.
+Kafka is a required part of the run contract. Murmur refuses new runs when either
+Kafka or Redis is unavailable, and an unacknowledged Kafka event fails the run
+instead of silently degrading to a Redis-only path.
 
 ## Commands
 

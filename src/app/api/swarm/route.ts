@@ -36,8 +36,8 @@ export async function POST(req: Request) {
   }
 
   try {
-    // Redis is always part of the run contract. Kafka is also required unless
-    // this deployment explicitly opts into Redis-only telemetry mode.
+    // Redis and Kafka are both part of the run contract. A launch is rejected
+    // if either durable event dependency is unavailable.
     await assertInfrastructureReady();
   } catch (error) {
     const health = error instanceof InfrastructureUnavailableError ? error.health : undefined;

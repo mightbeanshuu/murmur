@@ -73,6 +73,11 @@ export function getKafkaConfig(): KafkaInfrastructureConfig {
     .map((broker) => broker.trim())
     .filter(Boolean);
   if (brokers.length === 0) throw new InfrastructureConfigError("KAFKA_BROKERS must contain at least one broker.");
+  if (brokers.some((broker) => broker.includes("://") || /\s/.test(broker))) {
+    throw new InfrastructureConfigError(
+      "KAFKA_BROKERS must contain comma-separated host:port values without URL schemes.",
+    );
+  }
 
   const topic = required("KAFKA_SWARM_EVENTS_TOPIC");
   if (!/^[a-zA-Z0-9._-]+$/.test(topic)) {
@@ -89,17 +94,6 @@ export function getKafkaConfig(): KafkaInfrastructureConfig {
     requestTimeoutMs: positiveInt("KAFKA_REQUEST_TIMEOUT_MS", 30_000),
     retryCount: positiveInt("KAFKA_RETRY_COUNT", 8),
   };
-}
-
-/** Kafka is strict by default; serverless demos may explicitly disable it. */
-export function isKafkaRequired() {
-  return bool("MURMUR_KAFKA_REQUIRED", true);
-}
-
-export function isKafkaConfigured() {
-  return Boolean(
-    process.env.KAFKA_BROKERS?.trim() && process.env.KAFKA_SWARM_EVENTS_TOPIC?.trim(),
-  );
 }
 
 export function getRedisConfig(): RedisInfrastructureConfig {

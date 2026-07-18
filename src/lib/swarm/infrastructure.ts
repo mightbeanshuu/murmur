@@ -1,8 +1,6 @@
 import {
   getInfrastructureHealthCacheMs,
   InfrastructureConfigError,
-  isKafkaConfigured,
-  isKafkaRequired,
 } from "./config";
 import { pingKafka } from "./kafka";
 import { pingRedis } from "./redis";
@@ -16,7 +14,7 @@ export interface DependencyHealth {
 export interface InfrastructureHealth {
   ok: boolean;
   checkedAt: number;
-  kafka: DependencyHealth & { required: boolean };
+  kafka: DependencyHealth;
   redis: DependencyHealth;
 }
 
@@ -47,22 +45,12 @@ export async function getInfrastructureHealth(options: { force?: boolean } = {})
   // Share an active probe even when a caller asks to bypass the cached result.
   if (inFlight) return inFlight;
 
-  const kafkaRequired = isKafkaRequired();
-  const kafkaProbe =
-    kafkaRequired || isKafkaConfigured()
-      ? checkDependency(pingKafka)
-      : Promise.resolve<DependencyHealth>({
-          ok: false,
-          latencyMs: 0,
-          error: "Kafka telemetry is disabled for this deployment.",
-        });
-
-  inFlight = Promise.all([kafkaProbe, checkDependency(pingRedis)])
+  inFlight = Promise.all([checkDependency(pingKafka), checkDependency(pingRedis)])
     .then(([kafka, redis]) => {
       const value: InfrastructureHealth = {
-        ok: redis.ok && (!kafkaRequired || kafka.ok),
+        ok: kafka.ok && redis.ok,
         checkedAt: Date.now(),
-        kafka: { ...kafka, required: kafkaRequired },
+        kafka,
         redis,
       };
       cached = { expiresAt: Date.now() + getInfrastructureHealthCacheMs(), value };

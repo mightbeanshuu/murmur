@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,13 +17,19 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/sasl/plain"
+	"github.com/twmb/franz-go/pkg/sasl/scram"
 )
 
 type config struct {
-	brokers []string
-	topic   string
-	groupID string
-	address string
+	brokers       []string
+	topic         string
+	groupID       string
+	address       string
+	ssl           bool
+	saslMechanism string
+	username      string
+	password      string
 }
 
 type envelope struct {
@@ -58,14 +65,12 @@ func main() {
 	defer stop()
 
 	stats := &metrics{}
-	client, err := kgo.NewClient(
-		kgo.SeedBrokers(cfg.brokers...),
-		kgo.ClientID("murmur-go-telemetry"),
-		kgo.ConsumerGroup(cfg.groupID),
-		kgo.ConsumeTopics(cfg.topic),
-		kgo.DisableAutoCommit(),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-	)
+	options, err := kafkaOptions(cfg)
+	if err != nil {
+		slog.Error("configure Kafka client", "error", err)
+		os.Exit(1)
+	}
+	client, err := kgo.NewClient(options...)
 	if err != nil {
 		slog.Error("create Kafka client", "error", err)
 		os.Exit(1)
@@ -214,12 +219,69 @@ func loadConfig() (config, error) {
 	if _, err := strconv.Atoi(port); err != nil {
 		return config{}, fmt.Errorf("TELEMETRY_PORT must be numeric: %w", err)
 	}
+	ssl, err := boolEnv("KAFKA_SSL", false)
+	if err != nil {
+		return config{}, err
+	}
+	username := strings.TrimSpace(os.Getenv("KAFKA_USERNAME"))
+	password := strings.TrimSpace(os.Getenv("KAFKA_PASSWORD"))
+	if (username == "") != (password == "") {
+		return config{}, errors.New("KAFKA_USERNAME and KAFKA_PASSWORD must be configured together")
+	}
 	return config{
-		brokers: brokers,
-		topic:   env("KAFKA_SWARM_EVENTS_TOPIC", "murmur.swarm.events"),
-		groupID: env("KAFKA_TELEMETRY_GROUP_ID", "murmur-telemetry-v1"),
-		address: ":" + port,
+		brokers:       brokers,
+		topic:         env("KAFKA_SWARM_EVENTS_TOPIC", "murmur.swarm.events"),
+		groupID:       env("KAFKA_TELEMETRY_GROUP_ID", "murmur-telemetry-v1"),
+		address:       ":" + port,
+		ssl:           ssl,
+		saslMechanism: env("KAFKA_SASL_MECHANISM", "plain"),
+		username:      username,
+		password:      password,
 	}, nil
+}
+
+func kafkaOptions(cfg config) ([]kgo.Opt, error) {
+	options := []kgo.Opt{
+		kgo.SeedBrokers(cfg.brokers...),
+		kgo.ClientID("murmur-go-telemetry"),
+		kgo.ConsumerGroup(cfg.groupID),
+		kgo.ConsumeTopics(cfg.topic),
+		kgo.DisableAutoCommit(),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	}
+	if cfg.ssl {
+		options = append(options, kgo.DialTLSConfig(&tls.Config{MinVersion: tls.VersionTLS12}))
+	}
+	if cfg.username == "" {
+		return options, nil
+	}
+
+	switch cfg.saslMechanism {
+	case "plain":
+		options = append(options, kgo.SASL(plain.Auth{User: cfg.username, Pass: cfg.password}.AsMechanism()))
+	case "scram-sha-256":
+		options = append(options, kgo.SASL(scram.Auth{User: cfg.username, Pass: cfg.password}.AsSha256Mechanism()))
+	case "scram-sha-512":
+		options = append(options, kgo.SASL(scram.Auth{User: cfg.username, Pass: cfg.password}.AsSha512Mechanism()))
+	default:
+		return nil, fmt.Errorf("unsupported KAFKA_SASL_MECHANISM %q", cfg.saslMechanism)
+	}
+	return options, nil
+}
+
+func boolEnv(name string, fallback bool) (bool, error) {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	if value == "" {
+		return fallback, nil
+	}
+	switch value {
+	case "1", "true", "yes":
+		return true, nil
+	case "0", "false", "no":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s must be 1/0, true/false, or yes/no", name)
+	}
 }
 
 func env(name, fallback string) string {

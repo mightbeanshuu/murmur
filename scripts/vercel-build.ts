@@ -34,12 +34,21 @@ if (process.env.VERCEL_ENV === "production") {
     "BETTER_AUTH_SECRET",
     "BETTER_AUTH_URL",
     "DATABASE_URL",
+    "KAFKA_BROKERS",
+    "KAFKA_PASSWORD",
+    "KAFKA_SASL_MECHANISM",
+    "KAFKA_SSL",
+    "KAFKA_SWARM_EVENTS_TOPIC",
+    "KAFKA_USERNAME",
     "OPENROUTER_API_KEY",
     "REDIS_URL",
     "STRIPE_PRO_PRICE_ID",
     "STRIPE_SECRET_KEY",
     "STRIPE_WEBHOOK_SECRET",
   ]);
+  if (!["1", "true", "yes"].includes(process.env.KAFKA_SSL!.trim().toLowerCase())) {
+    throw new Error("KAFKA_SSL must be enabled for Production Kafka connections.");
+  }
   run("pnpm", ["db:migrate"]);
 }
 

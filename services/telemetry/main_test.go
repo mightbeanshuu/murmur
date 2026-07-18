@@ -23,3 +23,44 @@ func TestProcessRejectsInvalidEnvelope(t *testing.T) {
 		t.Fatal("expected invalid envelope error")
 	}
 }
+
+func TestLoadConfigAcceptsHostedKafkaTLSAndSASL(t *testing.T) {
+	t.Setenv("KAFKA_BROKERS", "kafka.example.com:12345")
+	t.Setenv("KAFKA_SSL", "1")
+	t.Setenv("KAFKA_SASL_MECHANISM", "scram-sha-256")
+	t.Setenv("KAFKA_USERNAME", "consumer")
+	t.Setenv("KAFKA_PASSWORD", "secret")
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig returned error: %v", err)
+	}
+	if !cfg.ssl || cfg.saslMechanism != "scram-sha-256" || cfg.username != "consumer" {
+		t.Fatalf("unexpected hosted Kafka config: %+v", cfg)
+	}
+	if _, err := kafkaOptions(cfg); err != nil {
+		t.Fatalf("kafkaOptions returned error: %v", err)
+	}
+}
+
+func TestLoadConfigRequiresCompleteSASLCredentials(t *testing.T) {
+	t.Setenv("KAFKA_USERNAME", "consumer")
+	t.Setenv("KAFKA_PASSWORD", "")
+	if _, err := loadConfig(); err == nil {
+		t.Fatal("expected incomplete SASL credentials error")
+	}
+}
+
+func TestKafkaOptionsRejectsUnsupportedSASLMechanism(t *testing.T) {
+	_, err := kafkaOptions(config{
+		brokers:       []string{"kafka.example.com:12345"},
+		topic:         "murmur.swarm.events",
+		groupID:       "murmur-telemetry-v1",
+		saslMechanism: "oauth",
+		username:      "consumer",
+		password:      "secret",
+	})
+	if err == nil {
+		t.Fatal("expected unsupported SASL mechanism error")
+	}
+}

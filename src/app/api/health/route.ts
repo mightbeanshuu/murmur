@@ -21,7 +21,7 @@ export async function GET() {
       dependencies: {
         kafka: {
           ok: health.kafka.ok,
-          required: health.kafka.required,
+          required: true,
           latencyMs: health.kafka.latencyMs,
         },
         redis: { ok: health.redis.ok, latencyMs: health.redis.latencyMs },

@@ -23,11 +23,10 @@ export function SystemStatus() {
 
   const ready = health?.status === "ready";
   const mode = health?.executionMode ?? "temporal";
-  const kafkaActive = health?.dependencies.kafka?.ok;
   const dependencyLabels: Record<string, string> = {
     postgres: "PostgreSQL",
     redis: "Redis",
-    kafka: "Kafka telemetry",
+    kafka: "Kafka event bus",
     temporal: "Temporal",
   };
 
@@ -48,7 +47,7 @@ export function SystemStatus() {
             <li key={key}>
               {dependency.ok ? <CheckIcon size={15} /> : <WarningIcon size={15} />}
               <span>{dependencyLabels[key] ?? key}</span>
-              <small>{key === "kafka" && !kafkaActive ? "Optional" : dependency.ok ? "Ready" : "Unavailable"}</small>
+              <small>{dependency.ok ? "Ready" : "Unavailable"}</small>
             </li>
           )) : <li><span className="murmur-button-loader" />Checking dependencies…</li>}
         </ul>
