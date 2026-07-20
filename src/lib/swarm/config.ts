@@ -78,7 +78,70 @@ function kafkaTls(): boolean | ConnectionOptions {
   };
 }
 
+/**
+ * Azure Event Hubs exposes a Kafka-protocol endpoint (SASL/PLAIN over TLS on port 9093),
+ * so the same KafkaJS producer/consumer code runs unchanged against managed Azure.
+ * When AZURE_EVENTHUBS_CONNECTION_STRING is set it takes precedence over a self-hosted broker.
+ */
+function azureEventHubsConfig(): KafkaInfrastructureConfig | null {
+  const connectionString = process.env.AZURE_EVENTHUBS_CONNECTION_STRING?.trim();
+  if (!connectionString) return null;
+
+  const parts = Object.fromEntries(
+    connectionString
+      .split(";")
+      .map((segment) => segment.trim())
+      .filter(Boolean)
+      .map((segment) => {
+        const index = segment.indexOf("=");
+        return index === -1
+          ? [segment, ""]
+          : [segment.slice(0, index).trim(), segment.slice(index + 1).trim()];
+      }),
+  ) as Record<string, string>;
+
+  if (!parts.Endpoint) {
+    throw new InfrastructureConfigError("AZURE_EVENTHUBS_CONNECTION_STRING must include an Endpoint=sb://... value.");
+  }
+  let host: string;
+  try {
+    host = new URL(parts.Endpoint).hostname; // <namespace>.servicebus.windows.net
+  } catch {
+    throw new InfrastructureConfigError("AZURE_EVENTHUBS_CONNECTION_STRING Endpoint must be a valid sb:// URL.");
+  }
+  if (!parts.SharedAccessKeyName || !parts.SharedAccessKey) {
+    throw new InfrastructureConfigError(
+      "AZURE_EVENTHUBS_CONNECTION_STRING must include SharedAccessKeyName and SharedAccessKey.",
+    );
+  }
+
+  // The Kafka topic maps to the event hub name: EntityPath in the connection string, else the standard topic env.
+  const topic = parts.EntityPath?.trim() || process.env.KAFKA_SWARM_EVENTS_TOPIC?.trim();
+  if (!topic) {
+    throw new InfrastructureConfigError(
+      "Azure Event Hubs requires an event hub name via EntityPath or KAFKA_SWARM_EVENTS_TOPIC.",
+    );
+  }
+  if (!/^[a-zA-Z0-9._-]+$/.test(topic)) {
+    throw new InfrastructureConfigError("Azure Event Hubs event hub name contains unsupported characters.");
+  }
+
+  return {
+    brokers: [`${host}:9093`],
+    clientId: process.env.KAFKA_CLIENT_ID?.trim() || "murmur-web",
+    topic,
+    ssl: true,
+    sasl: { mechanism: "plain", username: "$ConnectionString", password: connectionString },
+    connectionTimeoutMs: positiveInt("KAFKA_CONNECTION_TIMEOUT_MS", 5_000),
+    requestTimeoutMs: positiveInt("KAFKA_REQUEST_TIMEOUT_MS", 30_000),
+    retryCount: positiveInt("KAFKA_RETRY_COUNT", 8),
+  };
+}
+
 export function getKafkaConfig(): KafkaInfrastructureConfig {
+  const azure = azureEventHubsConfig();
+  if (azure) return azure;
+
   const brokers = required("KAFKA_BROKERS")
     .split(",")
     .map((broker) => broker.trim())

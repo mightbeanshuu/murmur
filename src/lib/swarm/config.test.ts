@@ -51,4 +51,40 @@ describe("Kafka infrastructure configuration", () => {
     vi.stubEnv("KAFKA_PASSWORD", "");
     expect(() => getKafkaConfig()).toThrow("KAFKA_USERNAME and KAFKA_PASSWORD must be configured together");
   });
+
+  it("targets Azure Event Hubs over the Kafka protocol when a connection string is set", () => {
+    vi.stubEnv(
+      "AZURE_EVENTHUBS_CONNECTION_STRING",
+      "Endpoint=sb://murmur-ns.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=abc123==;EntityPath=murmur.swarm.events",
+    );
+
+    expect(getKafkaConfig()).toMatchObject({
+      brokers: ["murmur-ns.servicebus.windows.net:9093"],
+      topic: "murmur.swarm.events",
+      ssl: true,
+      sasl: {
+        mechanism: "plain",
+        username: "$ConnectionString",
+        password:
+          "Endpoint=sb://murmur-ns.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=abc123==;EntityPath=murmur.swarm.events",
+      },
+    });
+  });
+
+  it("falls back to the event hub name from KAFKA_SWARM_EVENTS_TOPIC when EntityPath is absent", () => {
+    vi.stubEnv(
+      "AZURE_EVENTHUBS_CONNECTION_STRING",
+      "Endpoint=sb://murmur-ns.servicebus.windows.net/;SharedAccessKeyName=send;SharedAccessKey=key==",
+    );
+    vi.stubEnv("KAFKA_SWARM_EVENTS_TOPIC", "swarm.events");
+    expect(getKafkaConfig().topic).toBe("swarm.events");
+  });
+
+  it("rejects an Azure Event Hubs connection string missing its shared access key", () => {
+    vi.stubEnv(
+      "AZURE_EVENTHUBS_CONNECTION_STRING",
+      "Endpoint=sb://murmur-ns.servicebus.windows.net/;SharedAccessKeyName=send;EntityPath=swarm.events",
+    );
+    expect(() => getKafkaConfig()).toThrow("SharedAccessKeyName and SharedAccessKey");
+  });
 });
