@@ -5,7 +5,7 @@
 ## Resume bullets (current, verified against source)
 
 **MURMUR — Event-Driven AI Agent-Swarm Orchestrator**
-*Kafka · Temporal · PostgreSQL · Redis · Next.js · Go*
+*Kafka · Temporal · PostgreSQL · Redis · Stripe · Next.js · Go*
 
 - Engineered a distributed orchestrator where a planner decomposes one goal into a concurrent **task DAG**; parallel workers execute, validators request revisions, and a synthesizer merges results, streamed live over SSE to a React Flow graph.
 - Guaranteed **fault tolerance and durable retries** with Temporal workflows, atomic Redis rate limits and replayable event streams, plus versioned **Kafka** events consumed by an isolated Go service exporting Prometheus metrics.
