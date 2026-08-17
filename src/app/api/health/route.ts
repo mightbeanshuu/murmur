@@ -12,19 +12,23 @@ export async function GET() {
     check(pingDatabase),
     executionMode === "temporal" ? check(pingTemporal) : Promise.resolve({ ok: true, latencyMs: 0 }),
   ]);
+  // Kafka only mirrors run events to downstream consumers, so its absence is
+  // reported as "degraded" rather than failing the probe: the product still
+  // serves runs, and an uptime check should not page for lost telemetry.
   const ready = health.ok && postgres.ok && temporal.ok;
+  const degraded = ready && !health.kafka.ok;
   return Response.json(
     {
-      status: ready ? "ready" : "not_ready",
+      status: ready ? (degraded ? "degraded" : "ready") : "not_ready",
       executionMode,
       checkedAt: new Date(health.checkedAt).toISOString(),
       dependencies: {
         kafka: {
           ok: health.kafka.ok,
-          required: true,
+          required: false,
           latencyMs: health.kafka.latencyMs,
         },
-        redis: { ok: health.redis.ok, latencyMs: health.redis.latencyMs },
+        redis: { ok: health.redis.ok, required: true, latencyMs: health.redis.latencyMs },
         postgres,
         temporal,
       },

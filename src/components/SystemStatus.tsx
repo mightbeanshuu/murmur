@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { CheckIcon, ChevronDownIcon, RadioIcon, WarningIcon } from "./ui/Icons";
 
 interface HealthResponse {
-  status: "ready" | "not_ready";
+  status: "ready" | "degraded" | "not_ready";
   executionMode: "direct" | "temporal";
   dependencies: Record<string, { ok: boolean; required?: boolean }>;
 }
@@ -21,7 +21,9 @@ export function SystemStatus() {
     return () => controller.abort();
   }, []);
 
-  const ready = health?.status === "ready";
+  // "degraded" still serves runs — only optional telemetry is missing — so the
+  // header stays green and the affected row carries the caveat instead.
+  const ready = health?.status === "ready" || health?.status === "degraded";
   const mode = health?.executionMode ?? "temporal";
   const dependencyLabels: Record<string, string> = {
     postgres: "PostgreSQL",
@@ -47,7 +49,13 @@ export function SystemStatus() {
             <li key={key}>
               {dependency.ok ? <CheckIcon size={15} /> : <WarningIcon size={15} />}
               <span>{dependencyLabels[key] ?? key}</span>
-              <small>{dependency.ok ? "Ready" : "Unavailable"}</small>
+              <small>
+                {dependency.ok
+                  ? "Ready"
+                  : dependency.required === false
+                    ? "Degraded"
+                    : "Unavailable"}
+              </small>
             </li>
           )) : <li><span className="murmur-button-loader" />Checking dependencies…</li>}
         </ul>

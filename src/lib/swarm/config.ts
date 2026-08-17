@@ -192,3 +192,12 @@ export function getRedisConfig(): RedisInfrastructureConfig {
 export function getInfrastructureHealthCacheMs() {
   return positiveInt("MURMUR_INFRA_HEALTH_CACHE_MS", 5_000);
 }
+
+/**
+ * Upper bound on the Kafka readiness probe. Kafka is not required to start a
+ * run, so an unreachable broker must fail fast instead of spending the kafkajs
+ * retry budget while a request waits.
+ */
+export function getKafkaProbeTimeoutMs() {
+  return positiveInt("MURMUR_KAFKA_PROBE_TIMEOUT_MS", 3_000);
+}

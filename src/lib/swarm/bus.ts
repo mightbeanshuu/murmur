@@ -83,17 +83,29 @@ export class EventBus implements AsyncIterable<SwarmEvent> {
   }
 
   private async deliver(envelope: SwarmEventEnvelope) {
+    let persisted: boolean;
     try {
-      // Redis is the canonical recoverable record. Publish to Kafka only after
-      // Redis accepts the event so a Kafka failure never loses the source event.
-      const persisted = await persistRunEvent(envelope);
-      // A retried Temporal Activity can replay an already-stored sequence.
-      // Skip Kafka too, otherwise Redis would be idempotent while consumers
-      // still received a duplicate event.
-      if (persisted) await publishSwarmEvent(envelope);
+      // Redis is the canonical recoverable record, so losing a write here is
+      // genuinely terminal: the run's history would have a hole in it.
+      persisted = await persistRunEvent(envelope);
     } catch (error) {
       this.deliveryFailure ??= error;
-      console.error("Failed to deliver swarm event", error);
+      console.error("Failed to persist swarm event", error);
+      return;
+    }
+
+    // A retried Temporal Activity can replay an already-stored sequence.
+    // Skip Kafka too, otherwise Redis would be idempotent while consumers
+    // still received a duplicate event.
+    if (!persisted) return;
+
+    try {
+      await publishSwarmEvent(envelope);
+    } catch (error) {
+      // Kafka mirrors events to downstream consumers; it is not the source of
+      // truth. Redis has already accepted this event, so a broker outage must
+      // not fail a run the user is watching succeed — it only costs telemetry.
+      console.error("Kafka mirror publish failed; run unaffected", error);
     }
   }
 
