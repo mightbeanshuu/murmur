@@ -302,3 +302,23 @@
 - Added UI account controls, live infrastructure mode, Free/Pro badge, Upgrade action, and Manage billing action.
 - Rewrote the README and added architecture/deployment docs with honest limits and production checklist.
 - Remaining learning is now narrower: Stripe lifecycle/security, Temporal determinism and phase-level Activities, production observability/cost, deployment operations, and interview rehearsal.
+
+## Session 23 — Auth + Stripe webhook lesson (30 July 2026)
+- Re-read tutor skill instructions and re-audited the repository before teaching.
+- Commands run: `git log --oneline`, `git status --short`, `git log --stat`, `find src services -type f`.
+- Working tree clean at `1aba9ed`. No source, dependency, or config changes in this session.
+- Files re-read for accuracy: `src/lib/auth.ts`, `src/app/api/auth/[...all]/route.ts`, `src/lib/auth-client.ts`, `src/lib/database.ts`, `src/lib/http/request.ts`, `src/app/api/swarm/route.ts`, `src/app/api/billing/webhook/route.ts`, `src/lib/billing/service.ts`, `src/lib/billing/repository.ts`.
+- **Documentation gap found:** commits `ee1e090`, `a371e5d`, `dda711d`, `91116d1`, `65bd5d1`, `a4dc9da`, `44c0e75`, `957f26c`, `1aba9ed` (19–20 July) are shipped but absent from both learning logs. Offered a backfill entry; not yet written.
+- Learning logs only; three recall checkpoints left open for the learner (signature-before-parse, monotonic event guard, 500-vs-200 webhook response).
+
+## Session 24 — Revision + Temporal/Kafka-consumer/Go lesson (30 July 2026)
+- Files re-read for accuracy before teaching: `src/temporal/{workflows,activities,worker,constants}.ts`, `src/lib/temporal/client.ts`, `src/lib/swarm/{launch,executionMode,kafka,sse,tokenBudget}.ts`, `src/app/api/swarm/route.ts` (full gate order), `src/lib/research/firecrawl.ts`, `src/lib/mcp/server.ts`, `services/telemetry/main.go`, and `sessions.md` sessions 9–14.
+- Verified by inspection: `Murmur_Placement_Handbook.{md,html,pdf}` no longer exist in the repo (deleted at `957f26c`); `docs/placement-handbook/` retains only `handbook.css` and six SVG assets.
+- Verified the current `/api/swarm` gate order and the per-user quota path (`getUserPlan` → `runAllowance` → `enforceRunRateLimit` with separate `runs` and `runs:max` keys).
+- No source, dependency, or config changes. Learning logs only. Four checkpoints left open.
+
+## Session 25 — PostgreSQL lesson (30 July 2026)
+- Files read for accuracy: `scripts/migrate-auth.ts`, `scripts/migrate-billing.ts`, `scripts/migrate-mcp.ts`, `scripts/vercel-build.ts`, `src/lib/mcp/repository.ts`, `src/lib/database.ts`, `docker-compose.yml` (postgres service), `package.json` scripts.
+- Confirmed: no `.sql` files — schema lives inline in three `tsx` migration scripts run via `pnpm db:migrate`; Better Auth generates its own tables through `getMigrations(auth.options)`.
+- Confirmed: all three scripts serialise on the same advisory lock key `murmur:release-migrations`; `vercel-build.ts` runs `pnpm db:migrate` only when `VERCEL_ENV === "production"` and after validating 15 required env vars plus HTTPS/redis-scheme/Kafka-SSL checks.
+- No source, dependency, or config changes. Learning logs only.

@@ -250,6 +250,17 @@ Kafka is a required part of the run contract. Murmur refuses new runs when eithe
 Kafka or Redis is unavailable, and an unacknowledged Kafka event fails the run
 instead of silently degrading to a Redis-only path.
 
+## Repository layout
+
+```
+src/                 Next.js app — routes, swarm orchestrator, Redis/Kafka/Postgres adapters
+services/telemetry/  Go service: Kafka consumer -> gRPC (:9090) + WebSocket + Prometheus /metrics
+proto/               Protocol Buffer contracts for the gRPC surface
+scripts/             Release migrations and the env-validated production build
+docs/                Architecture, design, product, deployment (see docs/README.md)
+docs/notes/          Working notes kept for history, not maintained as docs
+```
+
 ## Commands
 
 | Command | Purpose |
