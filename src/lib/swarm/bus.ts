@@ -6,11 +6,16 @@ import { finishRunSession, persistRunEvent, type RunStatus, type SwarmEventEnvel
  * Async event queue that lets many parallel agents push events while a single
  * consumer (the HTTP stream) drains them in order. This is what makes concurrent
  * agent token streams interleave live in the UI.
+ *
+ * The iterator yields envelopes rather than bare events so the HTTP stream can
+ * label every frame with its sequence. The browser runs two transports over the
+ * same run, and the sequence is what lets it switch between them without
+ * replaying or skipping an event.
  */
-export class EventBus implements AsyncIterable<SwarmEvent> {
-  private queue: SwarmEvent[] = [];
+export class EventBus implements AsyncIterable<SwarmEventEnvelope> {
+  private queue: SwarmEventEnvelope[] = [];
   private waiters: {
-    resolve: (result: IteratorResult<SwarmEvent>) => void;
+    resolve: (result: IteratorResult<SwarmEventEnvelope>) => void;
     reject: (reason: Error) => void;
   }[] = [];
   private closing = false;
@@ -45,8 +50,8 @@ export class EventBus implements AsyncIterable<SwarmEvent> {
     // immediately. Otherwise, buffer the event until a reader asks for it.
     if (this.options.localDelivery !== false) {
       const waiter = this.waiters.shift();
-      if (waiter) waiter.resolve({ value: event, done: false });
-      else this.queue.push(event);
+      if (waiter) waiter.resolve({ value: envelope, done: false });
+      else this.queue.push(envelope);
     }
   }
 
@@ -109,7 +114,7 @@ export class EventBus implements AsyncIterable<SwarmEvent> {
     }
   }
 
-  [Symbol.asyncIterator](): AsyncIterator<SwarmEvent> {
+  [Symbol.asyncIterator](): AsyncIterator<SwarmEventEnvelope> {
     return {
       next: () => {
         // Drain already-buffered events first.

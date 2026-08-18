@@ -91,6 +91,7 @@ export function SwarmGraph() {
   const selected = useSwarm((s) => s.selected);
   const select = useSwarm((s) => s.select);
   const runStatus = useSwarm((s) => s.runStatus);
+  const transport = useSwarm((s) => s.transport);
   const goal = useSwarm((s) => s.goal);
 
   const pos = useMemo(() => layout(agents), [agents]);
@@ -200,6 +201,20 @@ export function SwarmGraph() {
           </span>
         </div>
         <div className="murmur-graph-actions">
+          {runStatus === "running" ? (
+            <span
+              className={`murmur-transport is-${transport ?? "pending"}`}
+              title={
+                transport === "websocket"
+                  ? "Live events arrive over the telemetry WebSocket, reconciled against the durable Redis log."
+                  : transport === "sse"
+                    ? "Live events arrive over the SSE response from /api/swarm."
+                    : "Choosing a live transport."
+              }
+            >
+              {transport === "websocket" ? "WebSocket" : transport === "sse" ? "SSE" : "Connecting"}
+            </span>
+          ) : null}
           <span className={`murmur-run-state is-${runStatus}`}>
             <RadioIcon size={13} />
             {runStatus === "running"

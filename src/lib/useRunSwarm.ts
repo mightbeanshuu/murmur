@@ -2,13 +2,22 @@
 
 import { useCallback, useRef } from "react";
 import { useSwarm } from "./store";
-import type { SwarmEvent } from "./swarm/types";
+import { consumeRunStream } from "./swarm/runStream";
+import { configuredWebSocketUrl } from "./swarm/wsTransport";
 import type { SwarmAttachment, SwarmMode } from "./swarm/request";
 
-/** Opens the streaming swarm run and feeds every event into the store. */
+/**
+ * Starts a run and feeds every event into the store.
+ *
+ * Starting stays an HTTP POST: it carries the auth session, consumes the rate
+ * limit and validates the body. Only the live event stream is transport-agnostic
+ * — `consumeRunStream` prefers the telemetry WebSocket and falls back to the SSE
+ * response, feeding both into the same store reducer.
+ */
 export function useRunSwarm() {
   const reset = useSwarm((s) => s.reset);
   const setRunId = useSwarm((s) => s.setRunId);
+  const setTransport = useSwarm((s) => s.setTransport);
   const apply = useSwarm((s) => s.apply);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -41,27 +50,15 @@ export function useRunSwarm() {
       const runId = res.headers.get("x-murmur-run-id");
       if (runId) setRunId(runId);
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const chunks = buffer.split("\n\n");
-        buffer = chunks.pop() ?? "";
-        for (const chunk of chunks) {
-          const line = chunk.trim();
-          if (!line.startsWith("data:")) continue;
-          try {
-            apply(JSON.parse(line.slice(5).trim()) as SwarmEvent);
-          } catch {
-            // ignore partial / malformed frames
-          }
-        }
-      }
+      await consumeRunStream({
+        runId,
+        body: res.body,
+        apply,
+        onTransport: setTransport,
+        websocketUrl: configuredWebSocketUrl(),
+        signal: ctrl.signal,
+      });
     },
-    [reset, setRunId, apply],
+    [reset, setRunId, setTransport, apply],
   );
 }

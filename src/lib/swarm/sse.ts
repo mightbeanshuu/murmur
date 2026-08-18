@@ -1,5 +1,4 @@
-import { getRunEventsAfter, getRunSession } from "./session";
-import type { SwarmEvent } from "./types";
+import { getRunEventsAfter, getRunSession, type SwarmEventEnvelope } from "./session";
 
 const POLL_MS = 150;
 
@@ -25,7 +24,7 @@ export async function* readDurableEvents(
   runId: string,
   ownerId: string,
   signal: AbortSignal,
-): AsyncGenerator<SwarmEvent> {
+): AsyncGenerator<SwarmEventEnvelope> {
   let sequence = 0;
 
   while (!signal.aborted) {
@@ -33,7 +32,7 @@ export async function* readDurableEvents(
     for (const envelope of envelopes) {
       if (envelope.ownerId !== ownerId) throw new Error("Run ownership mismatch.");
       sequence = envelope.sequence;
-      yield envelope.event;
+      yield envelope;
     }
 
     const session = await getRunSession(runId);

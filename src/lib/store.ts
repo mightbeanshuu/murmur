@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { AgentStatus, AgentType, SwarmEvent } from "./swarm/types";
+import type { RunTransport } from "./swarm/runStream";
 import { saveRun, type SavedRun } from "./history";
 
 export interface AgentNode {
@@ -26,6 +27,8 @@ export type RunStatus = "idle" | "running" | "done" | "error";
 interface State {
   runStatus: RunStatus;
   runId: string | null;
+  /** Which live transport is delivering events; null while none is proven yet. */
+  transport: RunTransport | null;
   goal: string;
   planSummary: string;
   planThinking: string;
@@ -40,6 +43,7 @@ interface State {
   reset: (goal: string) => void;
   goHome: () => void;
   setRunId: (runId: string) => void;
+  setTransport: (transport: RunTransport | null) => void;
   select: (id: string | null) => void;
   apply: (e: SwarmEvent) => void;
   loadRun: (run: SavedRun) => void;
@@ -61,6 +65,7 @@ function ensureEdge(edges: SwarmEdge[], source: string, target: string, label: s
 export const useSwarm = create<State>((set) => ({
   runStatus: "idle",
   runId: null,
+  transport: null,
   goal: "",
   planSummary: "",
   planThinking: "",
@@ -76,6 +81,7 @@ export const useSwarm = create<State>((set) => ({
     set({
       runStatus: "running",
       runId: null,
+      transport: null,
       goal,
       planSummary: "",
       planThinking: "",
@@ -111,6 +117,7 @@ export const useSwarm = create<State>((set) => ({
     set({
       runStatus: "idle",
       runId: null,
+      transport: null,
       goal: "",
       planSummary: "",
       planThinking: "",
@@ -127,10 +134,13 @@ export const useSwarm = create<State>((set) => ({
 
   setRunId: (runId) => set({ runId }),
 
+  setTransport: (transport) => set({ transport }),
+
   loadRun: (run) =>
     set({
       runStatus: "done",
       runId: run.id,
+      transport: null,
       goal: run.goal,
       planSummary: run.summary,
       planThinking: "",

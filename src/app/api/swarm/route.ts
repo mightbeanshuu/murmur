@@ -159,17 +159,29 @@ export async function POST(req: Request) {
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        for await (const event of running.events) {
+        for await (const envelope of running.events) {
           if (cancelled) break;
           // Server-Sent Events frame format. The blank line terminates one event.
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+          // The frame carries the run sequence because the browser may also be
+          // reading the same run from the telemetry WebSocket; the sequence is
+          // what lets it de-duplicate across the two transports.
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ sequence: envelope.sequence, event: envelope.event })}\n\n`,
+            ),
+          );
         }
       } catch (e) {
         console.error(`Swarm event stream ${runId} failed`, e);
         if (!cancelled) {
+          // sequence 0 marks a frame that was never persisted, so the client
+          // applies it without touching its de-duplication cursor.
           controller.enqueue(
             encoder.encode(
-              `data: ${JSON.stringify({ kind: "error", message: "The live event stream was interrupted." })}\n\n`,
+              `data: ${JSON.stringify({
+                sequence: 0,
+                event: { kind: "error", message: "The live event stream was interrupted." },
+              })}\n\n`,
             ),
           );
         }

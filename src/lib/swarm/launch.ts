@@ -1,9 +1,9 @@
 import { getExecutionMode, startSwarmWorkflow } from "@/lib/temporal/client";
 import { EventBus } from "./bus";
 import { runSwarm } from "./orchestrator";
-import { createRunSession, finishRunSession } from "./session";
+import { createRunSession, finishRunSession, type SwarmEventEnvelope } from "./session";
 import { readDurableEvents } from "./sse";
-import type { SwarmEvent, SwarmMode } from "./types";
+import type { SwarmMode } from "./types";
 
 export interface LaunchSwarmInput {
   runId: string;
@@ -16,7 +16,7 @@ export interface LaunchSwarmInput {
 
 export interface RunningSwarm {
   mode: "direct" | "temporal";
-  events: AsyncIterable<SwarmEvent>;
+  events: AsyncIterable<SwarmEventEnvelope>;
 }
 
 /**

@@ -577,6 +577,23 @@
 .murmur-run-state.is-error { color: var(--danger); }
 .murmur-run-state.is-running svg { animation: murmur-live-pulse 1.4s ease-in-out infinite; }
 
+/* Which live transport is actually delivering events, so the choice is
+   observable in the product rather than only in the architecture diagram. */
+.murmur-transport {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--subtle);
+  padding: 2px 7px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.04em;
+}
+.murmur-transport.is-websocket { border-color: rgb(103 232 249 / 30%); color: var(--cyan); }
+.murmur-transport.is-sse { border-color: rgb(251 191 36 / 30%); color: var(--warning); }
+
 .murmur-graph-canvas { position: relative; min-height: 0; flex: 1; overflow: hidden; }
 .murmur-graph-canvas.is-live::before {
   position: absolute;
