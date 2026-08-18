@@ -23,7 +23,7 @@ The system pairs a focused product experience with production-grade identity, bi
 - Redis stores run state, replayable events, and distributed rate limits.
 - Kafka receives versioned swarm events; an isolated Go consumer exports Prometheus metrics.
 - The same Go consumer re-publishes those events over a **server-streaming gRPC** API and a **WebSocket** endpoint, fanning one Kafka consumer out to many live subscribers.
-- SSE streams live events to a Zustand store and React Flow graph.
+- The browser renders live runs from that WebSocket when a telemetry URL is configured, and falls back to SSE automatically; both transports feed one Zustand store and React Flow graph.
 - Zod validates the planner and validator's structured LLM outputs.
 - Cloudinary stores attached images as authenticated assets before a vision model derives instruction-resistant text context.
 - Researcher agents use bounded Firecrawl web search, preserve source links, and state clearly when live search is unavailable.
@@ -49,11 +49,11 @@ Temporal Worker → swarm Activity → planner → DAG workers → validators �
           │                         ├─ OpenRouter through Vercel AI SDK
           │                         └─ Zod structured-output validation
           ▼
-Redis event stream ──SSE──▶ Zustand ──▶ React Flow
-          │
-          └─ Kafka ──▶ Go telemetry consumer ──┬─▶ /metrics        (Prometheus scrape)
-                                               ├─▶ gRPC :9090     (StreamRunEvents, server stream)
-                                               └─▶ ws://:9091/ws  (browser push)
+Redis event stream ──SSE (fallback + durable replay)──▶ Zustand ──▶ React Flow
+          │                                                          ▲
+          └─ Kafka ──▶ Go telemetry consumer ──┬─▶ /metrics          │  (Prometheus scrape)
+                                               ├─▶ gRPC :9090       │  (StreamRunEvents, server stream)
+                                               └─▶ wss://.../ws ────┘  (primary browser transport)
 
 Codex / Claude Code ──bearer token──▶ /api/mcp
                                       ├─ list_runs
@@ -144,10 +144,10 @@ Local services:
 
 | Service | Address | Purpose |
 | --- | --- | --- |
-| Next.js | `http://localhost:3000` | UI, auth, API, SSE |
+| Next.js | `http://localhost:3000` | UI, auth, API, SSE fallback + durable replay |
 | Temporal UI | `http://localhost:8233` | workflow inspection |
 | Go telemetry HTTP | `http://localhost:9091/metrics` | Prometheus metrics, `/healthz` |
-| Go telemetry WebSocket | `ws://localhost:9091/ws` | live event push to browsers |
+| Go telemetry WebSocket | `ws://localhost:9091/ws` | primary live event transport for the UI |
 | Go telemetry gRPC | `localhost:9090` | `TelemetryService`, health, reflection |
 | PostgreSQL | `localhost:5432` | users, sessions, billing |
 | Redis | `localhost:6379` | state, replay, limits |
@@ -199,7 +199,7 @@ surfaces read from it, chosen per consumer rather than as alternatives:
 | --- | --- | --- |
 | `GET /metrics` | `:9091` | Prometheus, which pulls on a schedule |
 | `TelemetryService` | `:9090` (gRPC) | other services: typed contract, one server stream instead of polling |
-| `GET /ws` | `:9091` | browsers, which cannot speak gRPC over HTTP/2 directly |
+| `GET /ws` | `:9091` | the Murmur UI and any other browser client; browsers cannot speak gRPC over HTTP/2 directly |
 
 The design constraint that shapes all three is that **fan-out must never block
 the Kafka poll loop**. A blocked poll loop stops committing offsets, stalls the
@@ -216,6 +216,53 @@ the Kafka consumer the socket needs to read from. It enforces an origin
 allowlist (`TELEMETRY_WS_ALLOWED_ORIGINS`) — a WebSocket handshake is a plain
 `GET` and is not covered by CORS preflight — plus server-side ping/pong
 keepalive so dead peers are reaped within one 20s interval.
+
+### How the browser consumes the stream
+
+Starting a run is always an HTTP `POST /api/swarm`: it carries the session,
+consumes the rate limit, and validates the body. Only the live event stream
+chooses a transport, and the rule is one variable:
+
+| `NEXT_PUBLIC_TELEMETRY_WS_URL` | Live transport |
+| --- | --- |
+| set | WebSocket, with automatic fallback to SSE |
+| empty | SSE only |
+
+The graph header shows which one is actually live, so the choice is observable
+in the product rather than asserted in a diagram.
+
+**Why fall back at all.** The socket terminates in the Go container, not in
+Next.js, because a Vercel serverless function cannot hold one open. Anything
+that stands between the browser and that container — no telemetry deployment, a
+corporate proxy that refuses `Upgrade`, a page on `https://` and a URL on `ws://`
+— has to degrade to something, and the SSE response from the same `POST` is
+already open and already durable.
+
+**Why the socket is worth preferring.** In `temporal` execution mode the SSE
+lane is a 150 ms Redis poll (`src/lib/swarm/sse.ts`), while the socket is a push
+straight off the Kafka fan-out. WebSocket-first is a latency win exactly where
+the app is deployed.
+
+**Why a durable log sits underneath both.** The Kafka publish is deliberately
+best-effort: `src/lib/swarm/bus.ts` swallows a publish failure because Redis has
+already accepted the event and a broker outage must not fail a run the user is
+watching succeed. So a WebSocket consumer *can* miss an event that definitely
+happened. A socket subscriber also only ever receives what the hub publishes
+after it subscribes, so the beginning of every run exists only in Redis.
+
+The client answers all of that with one mechanism. Every frame — SSE and
+WebSocket alike — carries the run's monotonic `sequence`, and
+`src/lib/swarm/runStream.ts` tracks the last one applied. A sequence that is not
+the expected next one, a handover between transports, or a socket that has just
+opened all trigger the same response: replay `GET /api/swarm/[runId]`, the
+Redis-backed endpoint, and let the sequence de-duplicate the overlap, so a
+replayed event is a no-op. The durable log is the source of truth; the socket is
+a latency optimisation over it.
+
+Dropped sockets reconnect on capped exponential backoff with jitter, and the SSE
+lane takes over immediately rather than after the retry ladder — a user should
+never watch a frozen graph while a socket that may never return is being retried
+in the background.
 
 Try it locally once `pnpm infra:up` is running:
 
