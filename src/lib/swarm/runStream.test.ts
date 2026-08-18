@@ -220,6 +220,40 @@ describe("consumeRunStream", () => {
     expect(useSwarm.getState().agents["agent-t1"].output).toBe("hello world");
   });
 
+  it("hands over when a socket hangs mid-handshake but leaves a live one alone", async () => {
+    const transports: RunTransport[] = [];
+    const deadlines: Array<() => void> = [];
+    const source = sseSource();
+    let socket: FakeSocket | undefined;
+
+    const streaming = consumeRunStream({
+      runId: RUN_ID,
+      body: source.stream,
+      apply: useSwarm.getState().apply,
+      onTransport: (transport) => transports.push(transport),
+      websocketUrl: SOCKET_URL,
+      backfill: async () => [],
+      createSocket: (url) => (socket = new FakeSocket(url)),
+      schedule: (run) => deadlines.push(run),
+      signal: new AbortController().signal,
+    });
+
+    // A socket that accepts TCP and never upgrades: nothing has been reported
+    // yet, so the deadline is what unblocks the UI.
+    expect(deadlines).toHaveLength(1);
+    deadlines[0]();
+    expect(transports).toEqual(["sse"]);
+
+    // The same deadline must never knock over a socket that did open.
+    socket?.open();
+    await flush();
+    deadlines[0]();
+    expect(transports).toEqual(["sse", "websocket"]);
+
+    source.close();
+    await streaming;
+  });
+
   it("hands the run back to SSE when a live socket drops, backfilling the hole", async () => {
     const transports: RunTransport[] = [];
     const source = sseSource();

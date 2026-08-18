@@ -29,8 +29,8 @@ export interface RunEventGateOptions {
  * The single event path both transports feed. Its whole job is to reconcile a
  * best-effort mirror with a durable log.
  *
- * Redis is the source of truth: `bus.ts:104-109` swallows a failed Kafka publish
- * on purpose, so a run can succeed with an event that never reached Kafka and
+ * Redis is the source of truth: `bus.ts` swallows a failed Kafka publish on
+ * purpose, so a run can succeed with an event that never reached Kafka and
  * therefore never reached the WebSocket. A socket consumer can also simply join
  * late — the telemetry hub only forwards what arrives after you subscribe.
  *
@@ -209,7 +209,11 @@ export async function consumeRunStream(options: RunStreamOptions): Promise<void>
     // A socket that is refused fires onDown in milliseconds. A socket that hangs
     // mid-handshake — a proxy that accepts TCP and never upgrades — would
     // otherwise leave the graph blank, so the deadline hands over on its own.
-    schedule(fallBackToSse, SOCKET_OPEN_DEADLINE_MS);
+    // It only ever fires for a socket that has never opened; a live one is left
+    // alone, and a socket that opens later still takes the run back.
+    schedule(() => {
+      if (!usedSocket) fallBackToSse();
+    }, SOCKET_OPEN_DEADLINE_MS);
   }
 
   const reader = options.body.getReader();
