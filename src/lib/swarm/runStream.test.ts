@@ -138,6 +138,22 @@ describe("createRunEventGate", () => {
     expect(applied.filter((event) => event.kind === "plan.token")).toHaveLength(1);
   });
 
+  it("pages through the durable log until it has caught up with the live lane", async () => {
+    // A long run is tens of thousands of token events; one replay page would
+    // leave the client permanently behind and re-trigger on every later frame.
+    const backfill = vi.fn(async (afterSequence: number) =>
+      FRAMES.slice(afterSequence, afterSequence + 2),
+    );
+    const gate = createRunEventGate({ apply, backfill });
+
+    gate.accept(FRAMES[6]);
+    await flush();
+
+    expect(backfill.mock.calls.map(([after]) => after)).toEqual([0, 2, 4]);
+    expect(gate.lastSequence()).toBe(7);
+    expect(applied).toEqual(EVENTS.slice(0, 7));
+  });
+
   it("applies an unsequenced frame without moving the de-duplication cursor", () => {
     const gate = createRunEventGate({ apply, backfill: vi.fn(async () => []) });
 

@@ -37,7 +37,7 @@ The browser has two lanes for one run and a single reducer behind them.
 | --- | --- | --- |
 | WebSocket | Kafka → Go hub → `wss://.../ws?runId=` | primary when `NEXT_PUBLIC_TELEMETRY_WS_URL` is set |
 | SSE | `POST /api/swarm` response | fallback, and the run's lifeline in `direct` mode |
-| Replay | `GET /api/swarm/[runId]` | durable Redis stream; reconciles the other two |
+| Replay | `GET /api/swarm/[runId]?after=<sequence>` | durable Redis stream, paginated from the client's cursor; reconciles the other two |
 
 Selection is by configuration, not by negotiation: a configured socket URL means
 WebSocket-first, an empty one means SSE only. The POST response is held open and

@@ -254,9 +254,9 @@ The client answers all of that with one mechanism. Every frame — SSE and
 WebSocket alike — carries the run's monotonic `sequence`, and
 `src/lib/swarm/runStream.ts` tracks the last one applied. A sequence that is not
 the expected next one, a handover between transports, or a socket that has just
-opened all trigger the same response: replay `GET /api/swarm/[runId]`, the
-Redis-backed endpoint, and let the sequence de-duplicate the overlap, so a
-replayed event is a no-op. The durable log is the source of truth; the socket is
+opened all trigger the same response: replay `GET /api/swarm/[runId]?after=`,
+the Redis-backed endpoint, from the client's own cursor, and let the sequence
+de-duplicate the overlap, so a replayed event is a no-op. The durable log is the source of truth; the socket is
 a latency optimisation over it.
 
 Dropped sockets reconnect on capped exponential backoff with jitter, and the SSE

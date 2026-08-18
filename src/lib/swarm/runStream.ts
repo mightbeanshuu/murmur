@@ -21,9 +21,17 @@ export interface RunEventGate {
 
 export interface RunEventGateOptions {
   apply: (event: SwarmEvent) => void;
-  backfill: () => Promise<RunFrame[]>;
+  /** Reads the durable stream from `afterSequence` onwards, one page at a time. */
+  backfill: (afterSequence: number) => Promise<RunFrame[]>;
   onBackfill?: (reason: "gap" | "handover") => void;
 }
+
+/**
+ * Bound on one replay. The Redis stream is capped at 10k events
+ * (MURMUR_RUN_EVENT_STREAM_MAX_LENGTH) and a page is 1k, so this cannot be hit
+ * by a legitimate run — it exists so a misbehaving endpoint cannot spin here.
+ */
+const MAX_REPLAY_PAGES = 20;
 
 /**
  * The single event path both transports feed. Its whole job is to reconcile a
@@ -55,19 +63,28 @@ export function createRunEventGate(options: RunEventGateOptions): RunEventGate {
     }
   };
 
+  const replay = async () => {
+    // The replay endpoint is paginated. A long run can be tens of thousands of
+    // token events, so a single page would leave the client permanently behind
+    // the socket and re-trigger a replay on every frame that follows.
+    for (let page = 0; page < MAX_REPLAY_PAGES; page += 1) {
+      const before = lastApplied;
+      for (const frame of await options.backfill(lastApplied)) {
+        if (frame.sequence > lastApplied) pending.set(frame.sequence, frame.event);
+      }
+      drain();
+      // Nothing new means the durable log has no more to give; an empty buffer
+      // means the live lane has already been caught up with.
+      if (lastApplied === before || pending.size === 0) return;
+    }
+  };
+
   const resync = (reason: "gap" | "handover") => {
     // One replay at a time. A burst of out-of-order frames is one hole in the
     // mirror, not one hole per frame.
     if (inFlight) return inFlight;
     options.onBackfill?.(reason);
-    inFlight = options
-      .backfill()
-      .then((frames) => {
-        for (const frame of frames) {
-          if (frame.sequence > lastApplied) pending.set(frame.sequence, frame.event);
-        }
-        drain();
-      })
+    inFlight = replay()
       .catch(() => {
         // A failed replay is not terminal: the live lanes keep delivering and
         // the next gap, lane handover, or end-of-run replay tries again.
@@ -104,8 +121,11 @@ export function createRunEventGate(options: RunEventGateOptions): RunEventGate {
 }
 
 /** Durable replay endpoint over the Redis-backed run stream. */
-export async function fetchRunBackfill(runId: string): Promise<RunFrame[]> {
-  const response = await fetch(`/api/swarm/${encodeURIComponent(runId)}`, { cache: "no-store" });
+export async function fetchRunBackfill(runId: string, afterSequence = 0): Promise<RunFrame[]> {
+  const response = await fetch(
+    `/api/swarm/${encodeURIComponent(runId)}?after=${afterSequence}`,
+    { cache: "no-store" },
+  );
   if (!response.ok) throw new Error(`Run replay failed with HTTP ${response.status}`);
   const payload = (await response.json()) as { events?: unknown };
   if (!Array.isArray(payload.events)) return [];
@@ -122,7 +142,7 @@ export interface RunStreamOptions {
   body: ReadableStream<Uint8Array>;
   apply: (event: SwarmEvent) => void;
   onTransport: (transport: RunTransport) => void;
-  backfill?: (runId: string) => Promise<RunFrame[]>;
+  backfill?: (runId: string, afterSequence: number) => Promise<RunFrame[]>;
   websocketUrl?: string | null;
   signal: AbortSignal;
   createSocket?: RunSocketFactory;
@@ -159,7 +179,7 @@ export async function consumeRunStream(options: RunStreamOptions): Promise<void>
 
   const gate = createRunEventGate({
     apply: options.apply,
-    backfill: () => (runId ? backfill(runId) : Promise.resolve([])),
+    backfill: (afterSequence) => (runId ? backfill(runId, afterSequence) : Promise.resolve([])),
   });
 
   // Until the socket is proven live, SSE renders. It only stays dark while a
