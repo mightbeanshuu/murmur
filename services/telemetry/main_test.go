@@ -6,8 +6,15 @@ func TestProcessCountsKnownEvents(t *testing.T) {
 	stats := &metrics{}
 	event := []byte(`{"version":1,"runId":"run-1","sequence":1,"occurredAt":123,"event":{"kind":"run.start"}}`)
 
-	if err := process(event, stats); err != nil {
+	decoded, err := process(event, stats)
+	if err != nil {
 		t.Fatalf("process returned error: %v", err)
+	}
+	if decoded.GetRunId() != "run-1" || decoded.GetKind() != "run.start" {
+		t.Fatalf("unexpected decoded event: %+v", decoded)
+	}
+	if decoded.GetPayloadJson() != `{"kind":"run.start"}` {
+		t.Fatalf("payload JSON = %q, want the original event body", decoded.GetPayloadJson())
 	}
 	if got := stats.events.Load(); got != 1 {
 		t.Fatalf("events = %d, want 1", got)
@@ -19,7 +26,7 @@ func TestProcessCountsKnownEvents(t *testing.T) {
 
 func TestProcessRejectsInvalidEnvelope(t *testing.T) {
 	stats := &metrics{}
-	if err := process([]byte(`{"version":1}`), stats); err == nil {
+	if _, err := process([]byte(`{"version":1}`), stats); err == nil {
 		t.Fatal("expected invalid envelope error")
 	}
 }
@@ -75,5 +82,28 @@ func TestKafkaOptionsRejectsUnsupportedSASLMechanism(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected unsupported SASL mechanism error")
+	}
+}
+
+func TestLoadConfigReadsGRPCPortAndWebSocketOrigins(t *testing.T) {
+	t.Setenv("TELEMETRY_GRPC_PORT", "9190")
+	t.Setenv("TELEMETRY_WS_ALLOWED_ORIGINS", "https://murmur.example.com, http://localhost:3000")
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig returned error: %v", err)
+	}
+	if cfg.grpcAddress != ":9190" {
+		t.Fatalf("grpcAddress = %q, want :9190", cfg.grpcAddress)
+	}
+	if len(cfg.wsOrigins) != 2 || cfg.wsOrigins[1] != "http://localhost:3000" {
+		t.Fatalf("wsOrigins = %#v, want both origins trimmed", cfg.wsOrigins)
+	}
+}
+
+func TestLoadConfigRejectsNonNumericGRPCPort(t *testing.T) {
+	t.Setenv("TELEMETRY_GRPC_PORT", "grpc")
+	if _, err := loadConfig(); err == nil {
+		t.Fatal("expected non-numeric TELEMETRY_GRPC_PORT error")
 	}
 }

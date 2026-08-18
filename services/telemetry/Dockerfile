@@ -9,5 +9,5 @@ FROM alpine:3.23
 RUN addgroup -S murmur && adduser -S -G murmur murmur
 COPY --from=builder /out/murmur-telemetry /usr/local/bin/murmur-telemetry
 USER murmur
-EXPOSE 9091
+EXPOSE 9091 9090
 ENTRYPOINT ["murmur-telemetry"]

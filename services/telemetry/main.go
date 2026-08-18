@@ -20,6 +20,8 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl/plain"
 	"github.com/twmb/franz-go/pkg/sasl/scram"
+
+	telemetryv1 "github.com/mightbeanshuu/murmur/services/telemetry/gen/telemetry/v1"
 )
 
 type config struct {
@@ -27,6 +29,8 @@ type config struct {
 	topic         string
 	groupID       string
 	address       string
+	grpcAddress   string
+	wsOrigins     []string
 	ssl           bool
 	caCert        string
 	saslMechanism string
@@ -35,13 +39,32 @@ type config struct {
 }
 
 type envelope struct {
-	Version    int    `json:"version"`
-	RunID      string `json:"runId"`
-	Sequence   int64  `json:"sequence"`
-	OccurredAt int64  `json:"occurredAt"`
-	Event      struct {
+	Version    int       `json:"version"`
+	RunID      string    `json:"runId"`
+	Sequence   int64     `json:"sequence"`
+	OccurredAt int64     `json:"occurredAt"`
+	Event      eventBody `json:"event"`
+}
+
+// eventBody keeps the event exactly as the web tier published it. The consumer
+// itself only needs `kind` for its counters, but gRPC and WebSocket subscribers
+// want the whole payload, and re-encoding a decoded struct would silently drop
+// every field this service does not know about.
+type eventBody struct {
+	Kind string `json:"kind"`
+	raw  []byte
+}
+
+func (b *eventBody) UnmarshalJSON(data []byte) error {
+	var shape struct {
 		Kind string `json:"kind"`
-	} `json:"event"`
+	}
+	if err := json.Unmarshal(data, &shape); err != nil {
+		return err
+	}
+	b.Kind = shape.Kind
+	b.raw = append(b.raw[:0], data...)
+	return nil
 }
 
 type metrics struct {
@@ -79,13 +102,23 @@ func main() {
 	}
 	defer client.Close()
 
+	// One Kafka consumer, many readers: /metrics scrapes, gRPC streams and
+	// WebSocket clients all read from the same poll loop through the hub.
+	events := newHub()
+
 	server := &http.Server{
 		Addr:              cfg.address,
-		Handler:           routes(stats),
+		Handler:           routes(ctx, stats, events, cfg.wsOrigins),
 		ReadHeaderTimeout: 3 * time.Second,
 	}
 
-	go consume(ctx, client, stats)
+	go consume(ctx, client, stats, events)
+	go func() {
+		if err := serveGRPC(ctx, cfg.grpcAddress, stats, events); err != nil {
+			slog.Error("telemetry gRPC server failed", "error", err)
+			stop()
+		}
+	}()
 	go func() {
 		slog.Info("telemetry HTTP server started", "address", cfg.address)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -95,12 +128,15 @@ func main() {
 	}()
 
 	<-ctx.Done()
+	// Closing the hub first releases WebSocket writers, so Shutdown is waiting
+	// on connections that are already unwinding rather than on live streams.
+	events.closeAll()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = server.Shutdown(shutdownCtx)
 }
 
-func consume(ctx context.Context, client *kgo.Client, stats *metrics) {
+func consume(ctx context.Context, client *kgo.Client, stats *metrics, events *hub) {
 	for ctx.Err() == nil {
 		if err := client.Ping(ctx); err != nil {
 			stats.consumerUp.Store(false)
@@ -128,9 +164,15 @@ func consume(ctx context.Context, client *kgo.Client, stats *metrics) {
 
 		records := make([]*kgo.Record, 0, fetches.NumRecords())
 		fetches.EachRecord(func(record *kgo.Record) {
-			if err := process(record.Value, stats); err != nil {
+			event, err := process(record.Value, stats)
+			if err != nil {
 				stats.invalidEvents.Add(1)
 				slog.Warn("invalid swarm event", "error", err, "partition", record.Partition, "offset", record.Offset)
+			} else {
+				// Non-blocking by contract. Fan-out must never slow the poll
+				// loop down, or a stalled subscriber would stop offset commits
+				// and eventually force a consumer group rebalance.
+				events.publish(event)
 			}
 			// Invalid records are observed and then acknowledged too. Otherwise one
 			// poison message would be fetched forever and block its partition. A
@@ -147,13 +189,13 @@ func consume(ctx context.Context, client *kgo.Client, stats *metrics) {
 	}
 }
 
-func process(value []byte, stats *metrics) error {
+func process(value []byte, stats *metrics) (*telemetryv1.RunEvent, error) {
 	var event envelope
 	if err := json.Unmarshal(value, &event); err != nil {
-		return fmt.Errorf("decode envelope: %w", err)
+		return nil, fmt.Errorf("decode envelope: %w", err)
 	}
 	if event.Version != 1 || event.RunID == "" || event.Sequence < 1 || event.Event.Kind == "" {
-		return errors.New("missing required envelope fields")
+		return nil, errors.New("missing required envelope fields")
 	}
 
 	stats.events.Add(1)
@@ -170,11 +212,20 @@ func process(value []byte, stats *metrics) error {
 	case "agent.token":
 		stats.tokenChunks.Add(1)
 	}
-	return nil
+
+	return &telemetryv1.RunEvent{
+		Version:      int32(event.Version),
+		RunId:        event.RunID,
+		Sequence:     event.Sequence,
+		OccurredAtMs: event.OccurredAt,
+		Kind:         event.Event.Kind,
+		PayloadJson:  string(event.Event.raw),
+	}, nil
 }
 
-func routes(stats *metrics) http.Handler {
+func routes(ctx context.Context, stats *metrics, events *hub, wsOrigins []string) http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /ws", websocketHandler(ctx, events, wsOrigins))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("content-type", "application/json")
 		if !stats.consumerUp.Load() {
@@ -193,6 +244,8 @@ func routes(stats *metrics) http.Handler {
 		writeCounter(w, "murmur_agent_spawns_total", stats.agentSpawns.Load())
 		writeCounter(w, "murmur_token_chunks_total", stats.tokenChunks.Load())
 		writeGauge(w, "murmur_last_event_timestamp_milliseconds", stats.lastEventAt.Load())
+		writeGauge(w, "murmur_stream_subscribers", events.subscriberCount())
+		writeCounter(w, "murmur_slow_subscribers_dropped_total", events.droppedCount())
 	})
 	return mux
 }
@@ -221,6 +274,10 @@ func loadConfig() (config, error) {
 	if _, err := strconv.Atoi(port); err != nil {
 		return config{}, fmt.Errorf("TELEMETRY_PORT must be numeric: %w", err)
 	}
+	grpcPort := env("TELEMETRY_GRPC_PORT", "9090")
+	if _, err := strconv.Atoi(grpcPort); err != nil {
+		return config{}, fmt.Errorf("TELEMETRY_GRPC_PORT must be numeric: %w", err)
+	}
 	ssl, err := boolEnv("KAFKA_SSL", false)
 	if err != nil {
 		return config{}, err
@@ -235,6 +292,8 @@ func loadConfig() (config, error) {
 		topic:         env("KAFKA_SWARM_EVENTS_TOPIC", "murmur.swarm.events"),
 		groupID:       env("KAFKA_TELEMETRY_GROUP_ID", "murmur-telemetry-v1"),
 		address:       ":" + port,
+		grpcAddress:   ":" + grpcPort,
+		wsOrigins:     splitNonEmpty(env("TELEMETRY_WS_ALLOWED_ORIGINS", "http://localhost:3000")),
 		ssl:           ssl,
 		caCert:        strings.ReplaceAll(strings.TrimSpace(os.Getenv("KAFKA_CA_CERT")), `\n`, "\n"),
 		saslMechanism: env("KAFKA_SASL_MECHANISM", "plain"),
