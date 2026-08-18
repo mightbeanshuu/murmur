@@ -34,6 +34,43 @@ Murmur will reject runs until that service is active again.
 
 Deploy `Dockerfile.temporal` to an always-on container platform. Deploy `services/telemetry/Dockerfile` separately. Both must use managed endpoints, not Compose service names.
 
+## Live event transport
+
+The browser prefers the telemetry WebSocket and falls back to the SSE response
+from `POST /api/swarm`. Two variables decide what actually happens in a given
+environment, and they must agree.
+
+| Variable | Set on | Meaning |
+| --- | --- | --- |
+| `NEXT_PUBLIC_TELEMETRY_WS_URL` | the web app (Vercel) | Where the **browser** dials. Set = WebSocket-first; empty = SSE only. |
+| `TELEMETRY_WS_ALLOWED_ORIGINS` | the Go service (Render) | Exact origins allowed to complete the handshake. |
+
+1. Deploy `services/telemetry` from the root `render.yaml` blueprint. Render
+   publishes it on `https://<service>.onrender.com`, so the socket address is
+   `wss://<service>.onrender.com/ws`.
+2. Set `TELEMETRY_WS_ALLOWED_ORIGINS` on the telemetry service to the exact web
+   origins, including scheme and no trailing slash — the production domain plus
+   any preview domain that should be able to open the socket, e.g.
+   `https://murmur.vercel.app,https://murmur-git-main-<scope>.vercel.app`.
+   A WebSocket handshake is a plain `GET`, so a CORS preflight never protects
+   this endpoint; the allowlist is the only check.
+3. Set `NEXT_PUBLIC_TELEMETRY_WS_URL=wss://<service>.onrender.com/ws` on Vercel
+   and redeploy. `NEXT_PUBLIC_*` values are inlined at build time, so editing the
+   variable alone changes nothing until the app is rebuilt.
+
+Constraints worth knowing before wiring this up:
+
+- The URL is dialled by the user's browser, not by the server. A deployed Vercel
+  app cannot reach a telemetry container running in local Compose, and a page
+  served over `https://` cannot open a `ws://` socket — browsers block the mixed
+  content. Production must be a public `wss://` address or the browser silently
+  stays on SSE.
+- Leaving `NEXT_PUBLIC_TELEMETRY_WS_URL` empty is a supported configuration, not
+  a broken one: the app runs entirely over SSE and the run stream indicator says
+  so.
+- The telemetry `/healthz` probe reports the Kafka consumer, not just the
+  process, so the service will not go live until its broker credentials work.
+
 ## Stripe
 
 - Create a recurring Pro Price.
