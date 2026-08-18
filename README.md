@@ -228,8 +228,11 @@ grpcurl -plaintext -d '{}' localhost:9090 grpc.health.v1.Health/Check
 # Server-streaming: this stays open and prints events as runs happen
 grpcurl -plaintext -d '{"run_id":""}' localhost:9090 murmur.telemetry.v1.TelemetryService/StreamRunEvents
 
-# WebSocket: same events as JSON frames
-websocat -H='Origin: http://localhost:3000' 'ws://localhost:9091/ws?runId='
+# WebSocket: same events as JSON frames. Drop ?runId= for the whole firehose.
+websocat -H 'Origin: http://localhost:3000' 'ws://localhost:9091/ws?runId=<run-id>'
+
+# ...or from the browser console on http://localhost:3000
+new WebSocket("ws://localhost:9091/ws").onmessage = (e) => console.log(JSON.parse(e.data));
 ```
 
 Regenerate the Go stubs after editing the contract:
