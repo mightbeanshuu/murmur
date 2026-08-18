@@ -5,10 +5,12 @@
 ## Resume bullets (current, verified against source)
 
 **MURMUR — Event-Driven AI Agent-Swarm Orchestrator**
-*Kafka · PostgreSQL · Redis · Stripe · Next.js · Go*
+*Go · gRPC · WebSockets · Kafka · PostgreSQL · Redis · Stripe · Next.js*
 
 - Engineered a distributed orchestrator where a planner decomposes one goal into a concurrent **task DAG**; parallel workers execute, validators request revisions, and a synthesizer merges results, streamed live over SSE to a React Flow graph.
 - Guaranteed replay-safety with a single **atomic Redis Lua script** that updates the run projection and appends to an XADD stream under a deterministic `sequence-0` id, so a replayed event is a no-op; **Kafka** mirrors those events to an isolated **Go** consumer exporting Prometheus metrics.
+- Exposed the Go telemetry service over **gRPC and WebSockets**: a server-streaming `StreamRunEvents` RPC (with gRPC health + reflection) and a `/ws` socket push the same live event feed to services and browsers, with an origin allowlist and ping/pong keepalive.
+- Fanned **one Kafka consumer out to N concurrent subscribers** through a mutex-guarded registry of per-subscriber buffered channels; `publish` never blocks, and a subscriber that fills its buffer is evicted rather than allowed to stall offset commits and force a consumer-group rebalance. Verified with `-race` tests over gRPC bufconn and a real WebSocket handshake.
 - Shipped production concerns end to end: PostgreSQL-backed auth and per-run ownership, Stripe billing with signed webhooks, schema-validated LLM output and Docker Compose deployment.
 
 ## Facts these bullets rest on
@@ -18,12 +20,33 @@
 | Planner → DAG → workers → validator → synthesizer | `README.md` request path; Temporal `swarm` activity |
 | SSE → Zustand → React Flow | `README.md`; `src/` stream + store |
 | Temporal durable workflows | `Dockerfile.temporal`, `services/`, `docker-compose.yml` |
-| Kafka events → Go consumer → `/metrics` (Prometheus text format) | `src/lib/swarm/kafka.ts`, `services/telemetry/main.go:178,185` |
+| Kafka events → Go consumer → `/metrics` (Prometheus text format) | `src/lib/swarm/kafka.ts`, `services/telemetry/main.go:236,243` |
+| gRPC contract: unary `GetRunMetrics` + **server-streaming** `StreamRunEvents` | `proto/telemetry/v1/telemetry.proto:14,19` |
+| gRPC stream handler, health service, reflection | `services/telemetry/grpc.go:43,101,104` |
+| WebSocket endpoint mounted on the telemetry HTTP server | `services/telemetry/main.go:228`, `services/telemetry/ws.go:44` |
+| WebSocket origin allowlist + server-side ping/pong keepalive | `services/telemetry/ws.go:46,97,148` |
+| Non-blocking fan-out; slow subscriber evicted, not waited on | `services/telemetry/hub.go:15,77,87` |
+| Kafka poll loop publishes into the hub | `services/telemetry/main.go:175` |
+| gRPC bufconn + WebSocket + fan-out tests, all under `-race` | `services/telemetry/grpc_test.go`, `ws_test.go`, `hub_test.go` |
+| CI: pnpm lint/typecheck/test (real Redis service) + `go vet`/`build`/`test -race` | `.github/workflows/ci.yml` |
 | Redis run state, replayable events, atomic per-user rate limits | `README.md` (Free 3 runs/hr, Pro 100/hr) |
 | Better Auth + PostgreSQL sessions, run ownership | `README.md` |
 | Stripe Checkout, signed webhooks, entitlement projection | `README.md` |
 | Zod-validated planner/validator structured output | `README.md` |
 | Read-only account-scoped MCP server (`list_runs`, `get_final_deliverable`) | `README.md` |
+
+## Interview caveats to volunteer
+
+- The **browser UI still consumes SSE**, not the WebSocket. Vercel's serverless
+  functions cannot hold a socket open, so `/ws` lives in the Go container and is
+  the path a self-hosted deployment or a second service would use. Say this
+  before being asked.
+- gRPC is **service-to-service**; browsers cannot speak gRPC over HTTP/2 without
+  a grpc-web proxy, which is exactly why the same hub also exposes `/ws`.
+- The event body crosses the gRPC boundary as `payload_json`, not as typed
+  protobuf variants, because the union is owned by the TypeScript orchestrator
+  (`src/lib/swarm/types.ts`). That is a deliberate coupling trade-off, not an
+  oversight.
 
 ## Claims deliberately NOT made
 - No user/traffic numbers (no production telemetry to cite).

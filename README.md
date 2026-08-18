@@ -22,6 +22,7 @@ The system pairs a focused product experience with production-grade identity, bi
 - Temporal moves long-running orchestration out of the HTTP process.
 - Redis stores run state, replayable events, and distributed rate limits.
 - Kafka receives versioned swarm events; an isolated Go consumer exports Prometheus metrics.
+- The same Go consumer re-publishes those events over a **server-streaming gRPC** API and a **WebSocket** endpoint, fanning one Kafka consumer out to many live subscribers.
 - SSE streams live events to a Zustand store and React Flow graph.
 - Zod validates the planner and validator's structured LLM outputs.
 - Cloudinary stores attached images as authenticated assets before a vision model derives instruction-resistant text context.
@@ -50,7 +51,9 @@ Temporal Worker → swarm Activity → planner → DAG workers → validators �
           ▼
 Redis event stream ──SSE──▶ Zustand ──▶ React Flow
           │
-          └─ Kafka ──▶ Go telemetry consumer ──▶ /metrics
+          └─ Kafka ──▶ Go telemetry consumer ──┬─▶ /metrics        (Prometheus scrape)
+                                               ├─▶ gRPC :9090     (StreamRunEvents, server stream)
+                                               └─▶ ws://:9091/ws  (browser push)
 
 Codex / Claude Code ──bearer token──▶ /api/mcp
                                       ├─ list_runs
@@ -111,7 +114,8 @@ src/lib/media/              authenticated Cloudinary image storage adapter
 src/lib/swarm/              orchestration domain + application services
 src/lib/temporal/           durable-workflow client adapter
 src/temporal/               workflow/worker process boundary
-services/telemetry/         independent Go Kafka consumer
+services/telemetry/         independent Go Kafka consumer (HTTP + gRPC + WebSocket)
+proto/telemetry/v1/         gRPC contract for the telemetry service
 scripts/                    idempotent database migrations
 ```
 
@@ -142,7 +146,9 @@ Local services:
 | --- | --- | --- |
 | Next.js | `http://localhost:3000` | UI, auth, API, SSE |
 | Temporal UI | `http://localhost:8233` | workflow inspection |
-| Go telemetry | `http://localhost:9091/metrics` | Prometheus metrics |
+| Go telemetry HTTP | `http://localhost:9091/metrics` | Prometheus metrics, `/healthz` |
+| Go telemetry WebSocket | `ws://localhost:9091/ws` | live event push to browsers |
+| Go telemetry gRPC | `localhost:9090` | `TelemetryService`, health, reflection |
 | PostgreSQL | `localhost:5432` | users, sessions, billing |
 | Redis | `localhost:6379` | state, replay, limits |
 | Kafka | `localhost:9092` | event stream |
@@ -183,6 +189,60 @@ Go is not a second Murmur backend. `services/telemetry` is a distinct Kafka cons
 
 Deleting the Go service would remove metrics, but authentication, AI orchestration, and the UI would still work. That independence is the point.
 
+### Real-time surfaces: gRPC and WebSockets
+
+The consumer reads each Kafka partition once and fans the events out to every
+subscriber through an in-process hub (`services/telemetry/hub.go`). Three
+surfaces read from it, chosen per consumer rather than as alternatives:
+
+| Surface | Address | For |
+| --- | --- | --- |
+| `GET /metrics` | `:9091` | Prometheus, which pulls on a schedule |
+| `TelemetryService` | `:9090` (gRPC) | other services: typed contract, one server stream instead of polling |
+| `GET /ws` | `:9091` | browsers, which cannot speak gRPC over HTTP/2 directly |
+
+The design constraint that shapes all three is that **fan-out must never block
+the Kafka poll loop**. A blocked poll loop stops committing offsets, stalls the
+consumer group, and eventually forces a rebalance — one frozen browser tab would
+take telemetry down for everyone. So each subscriber owns a 256-event buffered
+channel, `hub.publish` sends non-blocking, and a subscriber that fills its
+buffer is evicted rather than waited on. The evicted client sees a closed
+stream (gRPC `UNAVAILABLE`, WebSocket close code 1013) instead of silently
+missing sequence numbers, and `murmur_slow_subscribers_dropped_total` counts it.
+
+The WebSocket lives here rather than in Next.js because Vercel's serverless
+functions cannot hold a long-lived socket open, and this process already owns
+the Kafka consumer the socket needs to read from. It enforces an origin
+allowlist (`TELEMETRY_WS_ALLOWED_ORIGINS`) — a WebSocket handshake is a plain
+`GET` and is not covered by CORS preflight — plus server-side ping/pong
+keepalive so dead peers are reaped within one 20s interval.
+
+Try it locally once `pnpm infra:up` is running:
+
+```bash
+# gRPC, no .proto file needed — the server registers reflection
+grpcurl -plaintext localhost:9090 list
+grpcurl -plaintext -d '{}' localhost:9090 murmur.telemetry.v1.TelemetryService/GetRunMetrics
+grpcurl -plaintext -d '{}' localhost:9090 grpc.health.v1.Health/Check
+
+# Server-streaming: this stays open and prints events as runs happen
+grpcurl -plaintext -d '{"run_id":""}' localhost:9090 murmur.telemetry.v1.TelemetryService/StreamRunEvents
+
+# WebSocket: same events as JSON frames
+websocat -H='Origin: http://localhost:3000' 'ws://localhost:9091/ws?runId='
+```
+
+Regenerate the Go stubs after editing the contract:
+
+```bash
+go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+PATH="$PATH:$(go env GOPATH)/bin" protoc --proto_path=proto \
+  --go_out=services/telemetry/gen --go_opt=module=github.com/mightbeanshuu/murmur/services/telemetry/gen \
+  --go-grpc_out=services/telemetry/gen --go-grpc_opt=module=github.com/mightbeanshuu/murmur/services/telemetry/gen \
+  proto/telemetry/v1/telemetry.proto
+```
+
 Kafka is a required part of the run contract. Murmur refuses new runs when either
 Kafka or Redis is unavailable, and an unacknowledged Kafka event fails the run
 instead of silently degrading to a Redis-only path.
@@ -201,6 +261,12 @@ instead of silently degrading to a Redis-only path.
 | `pnpm infra:logs` | follow infrastructure logs |
 | `pnpm infra:down` | stop containers, preserve volumes |
 | `pnpm infra:reset` | remove containers and local data volumes |
+| `go test -race ./...` | telemetry service tests (run in `services/telemetry`) |
+
+`.github/workflows/ci.yml` runs both halves on every push and pull request: a
+`web` job (`pnpm lint`, `pnpm typecheck`, `pnpm test` against a real Redis
+service container, because the run projection is a Lua script a mock cannot
+exercise) and a `telemetry` job (`go vet`, `go build`, `go test -race`).
 
 ## Honest durability boundary
 
