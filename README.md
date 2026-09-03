@@ -348,3 +348,7 @@ Do not use Compose hostnames or `localhost` from Vercel. Use TLS-enabled managed
 
 Vercel Production builds use `scripts/vercel-build.ts` to run those idempotent
 release migrations before `next build`; Preview builds never mutate Production.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
