@@ -6,6 +6,13 @@
 <p align="center">Plan · Delegate · Execute · Validate · Synthesize</p>
 
 <p align="center">
+  <a href="https://github.com/mightbeanshuu/murmur/actions/workflows/ci.yml"><img src="https://github.com/mightbeanshuu/murmur/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License" /></a>
+  <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="Contributions welcome" /></a>
+</p>
+
+
+<p align="center">
   <img src="social-assets/murmur-iphone-loop-4x5.gif" width="480" alt="Murmur live agent swarm product walkthrough" />
 </p>
 
@@ -352,3 +359,9 @@ release migrations before `next build`; Preview builds never mutate Production.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Contributing
+
+Bug reports and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has
+the local setup and the checks CI runs. Vulnerabilities go through
+[SECURITY.md](SECURITY.md), privately, rather than a public issue.

@@ -1,6 +1,7 @@
 {
   "name": "murmur",
   "version": "0.1.0",
+  "description": "Turn one complex goal into a live, durable, validated agent swarm: plan, delegate, execute, validate, synthesize.",
   "private": true,
   "packageManager": "pnpm@11.1.2",
   "scripts": {
@@ -62,5 +63,10 @@
     "tsx": "^4.23.1",
     "typescript": "^5",
     "vitest": "^4.1.10"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mightbeanshuu/murmur.git"
   }
 }
