@@ -50,4 +50,23 @@ describe("runText", () => {
 
     expect(mocks.streamText).toHaveBeenCalledWith(expect.objectContaining({ maxOutputTokens: 800 }));
   });
+
+  it("falls through to the next model when one has been retired (404)", async () => {
+    mocks.chainFor.mockResolvedValue(["retired-model:free", "live-model:free"]);
+    mocks.streamText
+      .mockReturnValueOnce({
+        textStream: (async function* () {
+          throw Object.assign(new Error("This model is unavailable for free."), { statusCode: 404 });
+        })(),
+      })
+      .mockReturnValueOnce({
+        textStream: (async function* () {
+          yield "answer from the live model";
+        })(),
+      });
+
+    const res = await runText("worker", { system: "s", prompt: "p", onDelta: vi.fn() });
+
+    expect(res).toEqual({ text: "answer from the live model", modelId: "live-model:free" });
+  });
 });

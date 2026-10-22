@@ -9,19 +9,22 @@ import { enforceRateLimit, MODEL_RATE_LIMIT, rateLimitKey, RateLimitError } from
 const TIMEOUT_MS = Number(process.env.MURMUR_ATTEMPT_TIMEOUT_MS ?? 40000);
 
 // Treat rate-limit (429), payment-required (402, i.e. paid model on a free key),
+// model gone or gated (404/403 — OpenRouter retires free models without notice),
 // timeout (408), and 5xx as "try the next model in the chain". Anything else
 // (a bad schema, a programming error) is NOT retryable — walking the rest of
 // the chain would just waste time failing the same way on every other model.
 function shouldFallback(e: unknown): boolean {
   const err = e as { statusCode?: number; status?: number; message?: string };
   const code = err?.statusCode ?? err?.status;
-  if (code && (code === 429 || code === 402 || code === 408 || code >= 500)) return true;
+  if (code && (code === 429 || code === 402 || code === 404 || code === 403 || code === 408 || code >= 500)) return true;
   const m = (err?.message ?? "").toLowerCase();
   return (
     m.includes("rate-limit") ||
     m.includes("rate limit") ||
     m.includes("429") ||
     m.includes("quota") ||
+    m.includes("unavailable") ||
+    m.includes("no endpoints found") ||
     m.includes("empty completion") // model responded but produced nothing; another model may not
   );
 }

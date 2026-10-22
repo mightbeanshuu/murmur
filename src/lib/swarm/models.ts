@@ -8,23 +8,26 @@ export const model = (id: string) => openrouter(id);
 // Preferred paid model — auto-used the moment the OpenRouter key has credit.
 const CLAUDE = process.env.MURMUR_CLAUDE_MODEL ?? "anthropic/claude-sonnet-4.5";
 
-// Free fallback pools (verified live on OpenRouter). Order = preference; the executor
-// walks the list on rate-limit / unavailability so a single 429 never kills a run.
+// Free fallback pools (re-verified live on OpenRouter 2026-10-22). Order = preference;
+// the executor walks the list on rate-limit / unavailability so a single 429 never kills
+// a run. OpenRouter retires free models without notice, so chainFor() also drops any id
+// that is no longer listed — a stale entry here costs nothing instead of failing the run.
 const FREE_STRUCTURED = [
-  "nvidia/nemotron-nano-9b-v2:free",
-  "nvidia/nemotron-3-super-120b-a12b:free",
+  "nvidia/nemotron-3-ultra-550b-a55b:free",
+  "minimax/minimax-m3.1-flash:free",
+  "nvidia/nemotron-3.5-lightning:free",
   "google/gemma-4-31b-it:free",
-  "qwen/qwen3-next-80b-a3b-instruct:free",
 ];
 const FREE_CHAT = [
-  "openai/gpt-oss-120b:free",
-  "nvidia/nemotron-3-super-120b-a12b:free",
+  "minimax/minimax-m3.1-flash:free",
+  "nvidia/nemotron-3-ultra-550b-a55b:free",
+  "poolside/laguna-s-2.1:free",
+  "nvidia/nemotron-3.5-lightning:free",
   "google/gemma-4-31b-it:free",
-  "meta-llama/llama-3.3-70b-instruct:free",
 ];
 const FREE_VISION = [
   "google/gemma-4-31b-it:free",
-  "nvidia/nemotron-nano-12b-v2-vl:free",
+  "nvidia/nemotron-3.5-super-vl:free",
   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
 ];
 
@@ -59,6 +62,27 @@ function hasPaidAccess(): Promise<boolean> {
   return paidProbe;
 }
 
+// Cached list of model ids OpenRouter currently serves. Refreshed hourly; on a fetch
+// failure the chain is used unfiltered rather than emptied.
+const LIVE_TTL_MS = 60 * 60 * 1000;
+let liveModels: { at: number; ids: Promise<Set<string> | null> } | null = null;
+function liveModelIds(): Promise<Set<string> | null> {
+  if (!liveModels || Date.now() - liveModels.at > LIVE_TTL_MS) {
+    const ids = fetch("https://openrouter.ai/api/v1/models", { signal: AbortSignal.timeout(5000) })
+      .then((r) => r.json())
+      .then((j: { data?: { id: string }[] }) =>
+        j?.data?.length ? new Set(j.data.map((m) => m.id)) : null,
+      )
+      .catch((error) => {
+        liveModels = null; // retry on the next call instead of caching the failure
+        console.error("OpenRouter model list fetch failed; using the static chain", error);
+        return null;
+      });
+    liveModels = { at: Date.now(), ids };
+  }
+  return liveModels.ids;
+}
+
 /** Ordered list of model ids to try for a role. Claude first when the key is paid. */
 export async function chainFor(role: Role): Promise<string[]> {
   const paid = await hasPaidAccess();
@@ -71,5 +95,8 @@ export async function chainFor(role: Role): Promise<string[]> {
   const head = [ENV_OVERRIDE[role], paid && role !== "worker" ? CLAUDE : undefined].filter(
     Boolean,
   ) as string[];
-  return [...new Set([...head, ...pool])];
+  const live = await liveModelIds();
+  // Explicit overrides and the paid model are kept as-is; only the free pool is filtered.
+  const free = live ? pool.filter((id) => live.has(id)) : pool;
+  return [...new Set([...head, ...(free.length ? free : pool)])];
 }
